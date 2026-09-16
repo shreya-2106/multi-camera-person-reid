@@ -1,0 +1,11 @@
+﻿__pycache__/
+*.py[cod]
+data/
+models/
+*.pth
+*.pkl
+.venv/
+venv/
+.vscode/
+.idea/
+.DS_Store
