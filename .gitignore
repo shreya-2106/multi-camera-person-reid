@@ -1,11 +1,48 @@
-﻿__pycache__/
+# --- Python ---
+__pycache__/
 *.py[cod]
-data/
-models/
-*.pth
-*.pkl
-.venv/
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Virtual environments ---
 venv/
-.vscode/
-.idea/
+.venv/
+env/
+ENV/
+
+# --- Testing / coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Project data (large / generated, not committed) ---
+data/videos/*
+!data/videos/.gitkeep
+data/reid/*
+!data/reid/.gitkeep
+models/*
+!models/.gitkeep
+logs/
+output/
+
+# --- Env / secrets ---
+.env
+*.local.yaml
+
+# --- OS / editor ---
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

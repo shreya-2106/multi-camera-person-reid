@@ -1,0 +1,12 @@
+# Phase 1 dependencies only.
+# Detection (YOLO/ultralytics), tracking (ByteTrack), re-id (OSNet/torchreid),
+# similarity search (FAISS) and dashboard deps are intentionally NOT included
+# yet -- they will be added in later phases.
+
+PyYAML>=6.0
+pytest>=7.4
+pytest-cov>=4.1
+
+# Optional today, but detected gracefully if missing (src/env_check.py).
+# Uncomment when Phase 2 ML work begins.
+# torch>=2.0
