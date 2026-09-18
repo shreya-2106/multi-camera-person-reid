@@ -53,7 +53,7 @@ def parse_args(argv=None) -> argparse.Namespace:
 def ensure_directories(cfg: Config) -> None:
     """Create configured data/log/output directories if they don't exist."""
     paths = cfg.get("paths", {})
-    for key in ("data_dir", "videos_dir", "reid_data_dir", "models_dir", "logs_dir", "output_dir"):
+    for key in ("data_dir", "videos_dir", "reid_data_dir", "models_dir", "logs_dir", "output_dir", "reports_dir"):
         rel_path = paths.get(key)
         if not rel_path:
             continue

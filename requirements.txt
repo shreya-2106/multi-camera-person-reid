@@ -1,12 +1,14 @@
-# Phase 1 dependencies only.
-# Detection (YOLO/ultralytics), tracking (ByteTrack), re-id (OSNet/torchreid),
-# similarity search (FAISS) and dashboard deps are intentionally NOT included
-# yet -- they will be added in later phases.
+# Project dependencies
 
 PyYAML>=6.0
+opencv-python>=4.8
+
+# Phase 3 - YOLO person detection
+ultralytics>=8.1
+
 pytest>=7.4
 pytest-cov>=4.1
 
-# Optional today, but detected gracefully if missing (src/env_check.py).
-# Uncomment when Phase 2 ML work begins.
+# Optional ML acceleration.
+# Install a suitable PyTorch build separately if GPU acceleration is required.
 # torch>=2.0

@@ -1,12 +1,10 @@
 # Main application configuration
 # Multi-Camera Person Re-Identification & Tracking System
-# Phase 1: only generic app/paths/logging/device settings are meaningful.
-# Sections for detection/tracking/reid/matching are placeholders for later phases.
 
 app:
   name: "multi-camera-reid-tracking"
   version: "0.1.0"
-  env: "development"   # development | production | test
+  env: "development"
 
 paths:
   data_dir: "data"
@@ -15,27 +13,33 @@ paths:
   models_dir: "models"
   logs_dir: "logs"
   output_dir: "output"
+  reports_dir: "outputs"
 
 logging:
-  level: "INFO"          # DEBUG | INFO | WARNING | ERROR | CRITICAL
+  level: "INFO"
   log_to_file: true
   log_file: "app.log"
-  max_bytes: 5242880      # 5 MB
+  max_bytes: 5242880
   backup_count: 3
 
 device:
-  prefer_cuda: true       # use CUDA if available, else fall back to CPU
+  prefer_cuda: true
 
-# --- Placeholders for future phases (not implemented yet) ---
 detection:
-  enabled: false
-  model: "yolo"           # implemented in Phase 2
-  weights_path: "models/yolo/yolov8n.pt"
-  confidence_threshold: 0.5
+  enabled: true
+  model: "models/yolov8n.pt"
+  confidence: 0.5
+  iou: 0.45
+  imgsz: 640
+  device: "auto"
+  classes:
+    - "person"
+  output_dir: "outputs/detections"
+  annotated_output_dir: "outputs/annotated"
 
 tracking:
   enabled: false
-  tracker: "bytetrack"    # implemented in Phase 2
+  tracker: "bytetrack"
 
 reid:
   enabled: false
@@ -43,7 +47,7 @@ reid:
 
 matching:
   enabled: false
-  index: "faiss"          # implemented in Phase 3
+  index: "faiss"
 
 dashboard:
   enabled: false
