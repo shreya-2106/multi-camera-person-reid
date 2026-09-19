@@ -123,3 +123,21 @@ pytest -v --cov=src
 - **Phase 3**: OSNet re-identification embeddings, FAISS-based cross-camera matching
 - **Phase 4**: Camera topology modeling, temporal reasoning, trajectory construction
 - **Phase 5**: Database persistence, analytics, web dashboard
+# Multi-Camera Person Re-Identification and Tracking
+
+## Phase 4: local ByteTrack IDs
+
+Phase 4 connects the existing YOLO person detector to Ultralytics ByteTrack.
+It produces **local** track IDs: an ID is only meaningful within the one
+camera/video being processed. It is not a cross-camera or global identity.
+
+Run a CPU-friendly sample (the default configuration automatically selects CPU
+when CUDA is unavailable):
+
+```powershell
+python -m src.tracking.tracker --input data/videos/cam01.mp4 --max-frames 20 --annotate
+```
+
+The command writes `outputs/tracking/<CAMERA>_tracks.csv` and, when requested,
+`outputs/tracking_annotated/<CAMERA>_tracked.mp4`. No Re-ID, FAISS, or
+cross-camera matching is included in this phase.

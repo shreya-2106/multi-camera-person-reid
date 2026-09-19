@@ -38,8 +38,17 @@ detection:
   annotated_output_dir: "outputs/annotated"
 
 tracking:
-  enabled: false
+  # Phase 4: ByteTrack assigns IDs only within one camera/video stream.
+  enabled: true
   tracker: "bytetrack"
+  track_high_thresh: 0.5
+  track_low_thresh: 0.1
+  new_track_thresh: 0.6
+  track_buffer: 30
+  match_thresh: 0.8
+  fuse_score: true
+  output_dir: "outputs/tracking"
+  annotated_output_dir: "outputs/tracking_annotated"
 
 reid:
   enabled: false
