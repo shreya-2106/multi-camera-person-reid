@@ -1,15 +1,15 @@
-# Re-Identification configuration
-# Placeholder only -- OSNet / embedding model is NOT implemented until Phase 3.
-# Kept as a separate file so it can be merged on top of configs/config.yaml
-# via src.config.load_config(extra_config_path=...).
+# Re-Identification defaults, kept separate for callers that merge this file.
+# Phase 6 uses pretrained OSNet inference only. Fine-tuning is a future phase.
 
 reid:
-  model_name: "osnet_x1_0"      # to be implemented in Phase 3
-  weights_path: "models/reid/osnet_x1_0.pth"
-  embedding_dim: 512
-  input_size: [256, 128]        # [height, width]
-  batch_size: 32
+  enabled: true
+  model: "osnet"
+  device: "auto"
+  image_width: 128
+  image_height: 256
+  batch_size: 16
   normalize_embeddings: true
+  output_dir: "outputs/embeddings"
 
 matching:
   similarity_metric: "cosine"   # cosine | euclidean

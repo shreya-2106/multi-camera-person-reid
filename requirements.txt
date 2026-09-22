@@ -10,5 +10,11 @@ pytest>=7.4
 pytest-cov>=4.1
 
 # Optional ML acceleration.
-# Install a suitable PyTorch build separately if GPU acceleration is required.
-# torch>=2.0
+# Install the PyTorch build appropriate for the target CPU/GPU platform.
+torch>=2.0
+
+# Phase 6 - pretrained OSNet person Re-ID inference (no training/fine-tuning).
+torchreid>=0.2.5
+scipy>=1.10
+gdown>=5.0
+tensorboard>=2.14
