@@ -50,6 +50,16 @@ tracking:
   output_dir: "outputs/tracking"
   annotated_output_dir: "outputs/tracking_annotated"
 
+crops:
+  # Phase 5: prepare high-quality local-track crops for future Re-ID only.
+  enabled: true
+  output_dir: "outputs/crops"
+  min_width: 40
+  min_height: 80
+  min_area: 3200
+  padding: 0.05
+  save_every_n_frames: 5
+
 reid:
   enabled: false
   config_file: "configs/reid.yaml"

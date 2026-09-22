@@ -122,7 +122,7 @@ pytest -v --cov=src
 - **Phase 2**: YOLO-based person detection, ByteTrack single-camera tracking
 - **Phase 3**: OSNet re-identification embeddings, FAISS-based cross-camera matching
 - **Phase 4**: Camera topology modeling, temporal reasoning, trajectory construction
-- **Phase 5**: Database persistence, analytics, web dashboard
+- **Phase 5**: Person crop extraction and Re-ID data preparation
 # Multi-Camera Person Re-Identification and Tracking
 
 ## Phase 4: local ByteTrack IDs
@@ -141,3 +141,16 @@ python -m src.tracking.tracker --input data/videos/cam01.mp4 --max-frames 20 --a
 The command writes `outputs/tracking/<CAMERA>_tracks.csv` and, when requested,
 `outputs/tracking_annotated/<CAMERA>_tracked.mp4`. No Re-ID, FAISS, or
 cross-camera matching is included in this phase.
+
+## Phase 5: person crop preparation
+
+Phase 5 runs the existing YOLO and local ByteTrack pipeline, then saves sampled,
+quality-filtered person crops for a future embedding model. Track IDs are local
+to one input video/camera; they are not global identities. Crops are stored as
+`outputs/crops/<CAMERA>/track_<ID>/frame_<NUMBER>.jpg`, with a `crops.csv`
+metadata file per camera. OSNet/Re-ID, FAISS, and cross-camera matching are not
+implemented here.
+
+```powershell
+python -m src.crops.crop_extractor --input data/videos/cam01.mp4 --max-frames 100
+```
