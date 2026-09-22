@@ -154,3 +154,22 @@ implemented here.
 ```powershell
 python -m src.crops.crop_extractor --input data/videos/cam01.mp4 --max-frames 100
 ```
+
+## Phase 6: OSNet appearance embeddings
+
+Phase 6 runs pretrained OSNet **inference only** on Phase 5 crops. OSNet turns
+each crop into a numerical appearance embedding; it does not decide whether two
+people are the same and it does not train or fine-tune model weights. The
+embedder selects CUDA automatically when available and otherwise runs on CPU.
+It saves a per-local-track `embeddings.npy` plus an `embeddings.csv` mapping each
+vector index to its camera, local track, frame, and crop path under
+`outputs/embeddings/<CAMERA>/`. L2 normalization is enabled by default, so later
+FAISS/similarity matching can use cosine-style comparisons consistently.
+
+```powershell
+python -m src.reid.embedder --input outputs/crops/CAM01 --max-images 5
+```
+
+The first real run may download the pretrained OSNet weights through
+`torchreid`. Training/fine-tuning belongs to Phase 7; FAISS and cross-camera
+matching belong to later phases.

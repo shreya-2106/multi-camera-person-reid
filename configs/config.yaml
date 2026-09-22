@@ -61,8 +61,15 @@ crops:
   save_every_n_frames: 5
 
 reid:
-  enabled: false
-  config_file: "configs/reid.yaml"
+  # Phase 6: OSNet inference produces appearance embeddings only; it does not assign identities.
+  enabled: true
+  model: "osnet"
+  device: "auto"
+  image_width: 128
+  image_height: 256
+  batch_size: 16
+  normalize_embeddings: true
+  output_dir: "outputs/embeddings"
 
 matching:
   enabled: false
