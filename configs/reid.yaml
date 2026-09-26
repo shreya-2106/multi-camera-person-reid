@@ -10,6 +10,7 @@ reid:
   batch_size: 16
   normalize_embeddings: true
   output_dir: "outputs/embeddings"
+  checkpoint: "models/osnet_market1501_epoch_3.pth"
 
 matching:
   similarity_metric: "cosine"   # cosine | euclidean
