@@ -2,19 +2,27 @@
 
 A system for detecting, tracking, and re-identifying people across multiple
 camera feeds. This repository is being built in phases; **Phase 1 (project
-setup) is complete**. Detection, tracking, re-identification, matching,
-topology/temporal reasoning, trajectory building, database persistence,
-analytics, and the dashboard are **not yet implemented**.
+setup), Phase 2 (video/data validation), Phase 3 (YOLO person detection),
+Phase 4 (ByteTrack tracking), Phase 5 (person crop extraction), Phase 6
+(OSNet re-identification embeddings), Phase 7 (OSNet fine-tuning and
+evaluation), and Phase 8 (FAISS similarity matching and track-level
+matching) are complete**. Topology/temporal reasoning, trajectory building,
+database persistence, analytics, and the dashboard are **not yet implemented**.
 
 ## Project status
 
-| Phase | Scope | Status |
-|-------|-------|--------|
-| 1 | Project setup, config, logging, env/device checks | ✅ Done |
-| 2 | Detection (YOLO) + single-camera tracking (ByteTrack) | ⏳ Not started |
-| 3 | Re-identification (OSNet) + cross-camera matching (FAISS) | ⏳ Not started |
-| 4 | Topology, temporal reasoning, trajectory building | ⏳ Not started |
-| 5 | Database, analytics, dashboard | ⏳ Not started |
+| Phase | Scope                                              | Status        |
+| ----- | -------------------------------------------------- | ------------- |
+| 1     | Project setup, config, logging, env/device checks  | ✅ Done        |
+| 2     | Video/data validation                              | ✅ Done        |
+| 3     | Detection (YOLO)                                   | ✅ Done        |
+| 4     | Single-camera tracking (ByteTrack)                 | ✅ Done        |
+| 5     | Person crop extraction                             | ✅ Done        |
+| 6     | Re-identification (OSNet)                          | ✅ Done        |
+| 7     | OSNet fine-tuning and evaluation on Market-1501    | ✅ Done        |
+| 8     | Similarity matching (FAISS) + track-level matching | ✅ Done        |
+| 9     | Topology, temporal reasoning, trajectory building  | ⏳ Not started |
+| 10    | Database, analytics, dashboard                     | ⏳ Not started |
 
 ## Project structure
 
@@ -23,25 +31,25 @@ analytics, and the dashboard are **not yet implemented**.
 ├── data/
 │   ├── videos/            # input video files (gitignored)
 │   └── reid/               # re-id gallery/query images (gitignored)
-├── models/                 # model weights (gitignored)
+├── models/                 # model weights
 ├── src/
 │   ├── config.py            # YAML config loader
 │   ├── logging_setup.py     # logging configuration
 │   ├── env_check.py         # environment + CPU/CUDA device checks
-│   ├── detection/           # [Phase 2] person detection (YOLO)
-│   ├── tracking/            # [Phase 2] single-camera tracking (ByteTrack)
-│   ├── reid/                # [Phase 3] re-id embeddings (OSNet)
-│   ├── matching/            # [Phase 3] cross-camera matching (FAISS)
-│   ├── topology/            # [Phase 4] camera topology
-│   ├── temporal/            # [Phase 4] temporal reasoning
-│   ├── trajectory/          # [Phase 4] trajectory construction
-│   ├── database/            # [Phase 5] persistence layer
-│   └── analytics/           # [Phase 5] analytics/reporting
-├── training/                # model training scripts (future)
-├── dashboard/                # web dashboard (future)
+│   ├── detection/           # [Phase 3] person detection (YOLO)
+│   ├── tracking/            # [Phase 4] single-camera tracking (ByteTrack)
+│   ├── crops/               # [Phase 5] person crop extraction
+│   ├── reid/                # [Phase 6-8] re-id embeddings and matching
+│   ├── topology/            # [Phase 9] camera topology
+│   ├── temporal/            # [Phase 9] temporal reasoning
+│   ├── trajectory/          # [Phase 9] trajectory construction
+│   ├── database/            # [Phase 10] persistence layer
+│   └── analytics/           # [Phase 10] analytics/reporting
+├── training/                # model training scripts
+├── dashboard/               # web dashboard (future)
 ├── configs/
 │   ├── config.yaml           # main app configuration
-│   └── reid.yaml             # re-id configuration (placeholder)
+│   └── reid.yaml             # re-id configuration
 ├── tests/                    # unit tests
 ├── notebooks/                 # exploration notebooks
 ├── main.py                    # application entry point
@@ -51,10 +59,9 @@ analytics, and the dashboard are **not yet implemented**.
 
 ## Requirements
 
-- Python 3.9+
-- See `requirements.txt` (Phase 1 only needs PyYAML and pytest; heavier ML
-  dependencies such as `torch`, `ultralytics`, `torchreid`, and `faiss`
-  will be added in later phases).
+* Python 3.9+
+* See `requirements.txt` (PyYAML, pytest, torch, ultralytics, torchreid, and
+  faiss are used by the implemented phases).
 
 ## Setup
 
@@ -74,6 +81,7 @@ python main.py
 ```
 
 This will:
+
 1. Load `configs/config.yaml` (merged with `configs/reid.yaml`).
 2. Set up console + rotating file logging (`logs/app.log` by default).
 3. Run environment checks (Python version, required packages).
@@ -117,12 +125,11 @@ or, with coverage:
 pytest -v --cov=src
 ```
 
-## Roadmap (not yet implemented)
+## Roadmap
 
-- **Phase 2**: YOLO-based person detection, ByteTrack single-camera tracking
-- **Phase 3**: OSNet re-identification embeddings, FAISS-based cross-camera matching
-- **Phase 4**: Camera topology modeling, temporal reasoning, trajectory construction
-- **Phase 5**: Person crop extraction and Re-ID data preparation
+* **Phase 9**: Camera topology modeling, temporal reasoning, trajectory construction
+* **Phase 10**: Database, analytics, dashboard
+
 # Multi-Camera Person Re-Identification and Tracking
 
 ## Phase 4: local ByteTrack IDs
@@ -157,19 +164,47 @@ python -m src.crops.crop_extractor --input data/videos/cam01.mp4 --max-frames 10
 
 ## Phase 6: OSNet appearance embeddings
 
-Phase 6 runs pretrained OSNet **inference only** on Phase 5 crops. OSNet turns
+Phase 6 runs pretrained OSNet **inference** on Phase 5 crops. OSNet turns
 each crop into a numerical appearance embedding; it does not decide whether two
-people are the same and it does not train or fine-tune model weights. The
-embedder selects CUDA automatically when available and otherwise runs on CPU.
-It saves a per-local-track `embeddings.npy` plus an `embeddings.csv` mapping each
-vector index to its camera, local track, frame, and crop path under
-`outputs/embeddings/<CAMERA>/`. L2 normalization is enabled by default, so later
-FAISS/similarity matching can use cosine-style comparisons consistently.
+people are the same. The embedder selects CUDA automatically when available and
+otherwise runs on CPU. It saves a per-local-track `embeddings.npy` plus an
+`embeddings.csv` mapping each vector index to its camera, local track, frame,
+and crop path under `outputs/embeddings/<CAMERA>/`. L2 normalization is enabled
+by default, so FAISS/similarity matching can use cosine-style comparisons
+consistently.
 
 ```powershell
 python -m src.reid.embedder --input outputs/crops/CAM01 --max-images 5
 ```
 
 The first real run may download the pretrained OSNet weights through
-`torchreid`. Training/fine-tuning belongs to Phase 7; FAISS and cross-camera
-matching belong to later phases.
+`torchreid`.
+
+## Phase 7: OSNet fine-tuning and evaluation
+
+Phase 7 fine-tunes OSNet on the Market-1501 dataset and evaluates the trained
+model using Rank-1, Rank-5, Rank-10, and mAP.
+
+The trained checkpoint is:
+
+`models/osnet_market1501_epoch_3.pth`
+
+The Market-1501 evaluation results are:
+
+* Rank-1: 77.85%
+* Rank-5: 89.96%
+* Rank-10: 93.38%
+* mAP: 56.10%
+
+## Phase 8: FAISS similarity matching
+
+Phase 8 uses FAISS to perform similarity search over the 512-dimensional
+OSNet embeddings. L2-normalized embeddings are used so inner-product
+similarity corresponds to cosine similarity.
+
+Track-level matching compares embeddings from two local tracks and reports
+mean similarity, maximum similarity, and the number of comparisons.
+
+Appearance similarity alone does not assign final global identities.
+Camera topology and temporal reasoning are planned for later phases.
+
