@@ -70,12 +70,29 @@ def test_load_track_embeddings_missing_file(tmp_path):
         matcher.load_track_embeddings(missing_path)
 
 
-def test_real_track_files_can_be_compared():
+def test_track_files_can_be_compared(tmp_path):
     matcher = TrackMatcher()
 
+    track_a_path = tmp_path / "track_001" / "embeddings.npy"
+    track_b_path = tmp_path / "track_002" / "embeddings.npy"
+
+    track_a_path.parent.mkdir(parents=True)
+    track_b_path.parent.mkdir(parents=True)
+
+    track_a = np.random.default_rng(1).normal(
+        size=(6, 512)
+    ).astype(np.float32)
+
+    track_b = np.random.default_rng(2).normal(
+        size=(15, 512)
+    ).astype(np.float32)
+
+    np.save(track_a_path, track_a)
+    np.save(track_b_path, track_b)
+
     result = matcher.compare_tracks(
-        "outputs/embeddings/CAM01/track_001/embeddings.npy",
-        "outputs/embeddings/CAM01/track_002/embeddings.npy",
+        track_a_path,
+        track_b_path,
     )
 
     assert result.comparison_count == 90
