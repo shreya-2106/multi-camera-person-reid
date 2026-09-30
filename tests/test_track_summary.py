@@ -1,3 +1,5 @@
+import csv
+
 import pytest
 
 from src.temporal.track_summary import (
@@ -6,10 +8,77 @@ from src.temporal.track_summary import (
 )
 
 
-def test_build_real_tracking_summaries():
-    builder = TrackSummaryBuilder(
-        "outputs/tracking/CAM01_tracks.csv"
-    )
+def create_tracking_fixture(tmp_path):
+    csv_path = tmp_path / "CAM01_tracks.csv"
+
+    rows = []
+
+    # Track 1: frames 0-19
+    # 20 frames, timestamps 0.0 to 0.6339666667
+    for frame in range(20):
+        timestamp = frame * (0.6339666667 / 19)
+
+        rows.append(
+            {
+                "camera_id": "CAM01",
+                "frame_number": frame,
+                "timestamp_seconds": timestamp,
+                "track_id": 1,
+                "x1": 10.0 + frame,
+                "y1": 20.0,
+                "x2": 30.0 + frame,
+                "y2": 60.0,
+            }
+        )
+
+    # Track 2: frames 16-19
+    # 4 frames, timestamps 0.5338666667 to 0.6339666667
+    for frame in range(16, 20):
+        timestamp = 0.5338666667 + (
+            (frame - 16) * (0.1001 / 3)
+        )
+
+        rows.append(
+            {
+                "camera_id": "CAM01",
+                "frame_number": frame,
+                "timestamp_seconds": timestamp,
+                "track_id": 2,
+                "x1": 50.0 + frame,
+                "y1": 30.0,
+                "x2": 70.0 + frame,
+                "y2": 70.0,
+            }
+        )
+
+    with csv_path.open(
+        "w",
+        newline="",
+        encoding="utf-8",
+    ) as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "camera_id",
+                "frame_number",
+                "timestamp_seconds",
+                "track_id",
+                "x1",
+                "y1",
+                "x2",
+                "y2",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+
+    return csv_path
+
+
+def test_build_real_tracking_summaries(tmp_path):
+    csv_path = create_tracking_fixture(tmp_path)
+
+    builder = TrackSummaryBuilder(csv_path)
 
     summaries = builder.build()
 
@@ -74,10 +143,10 @@ def test_empty_csv(tmp_path):
         builder.build()
 
 
-def test_track_summary_duration_and_displacement():
-    builder = TrackSummaryBuilder(
-        "outputs/tracking/CAM01_tracks.csv"
-    )
+def test_track_summary_duration_and_displacement(tmp_path):
+    csv_path = create_tracking_fixture(tmp_path)
+
+    builder = TrackSummaryBuilder(csv_path)
 
     summaries = builder.build()
 
@@ -90,10 +159,10 @@ def test_track_summary_duration_and_displacement():
     assert track_1.displacement_pixels > 0.0
 
 
-def test_track_summary_to_dict():
-    builder = TrackSummaryBuilder(
-        "outputs/tracking/CAM01_tracks.csv"
-    )
+def test_track_summary_to_dict(tmp_path):
+    csv_path = create_tracking_fixture(tmp_path)
+
+    builder = TrackSummaryBuilder(csv_path)
 
     summary = builder.build()[0]
     data = summary.to_dict()

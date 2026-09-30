@@ -1,706 +1,1261 @@
-"""Multi-video analysis pipeline controller.
+"""Multi-video analysis pipeline.
 
 Phase 11:
-    Validate uploaded videos
+    video validation
         -> YOLO person detection
-        -> ByteTrack local tracking
-        -> sampled person crop extraction
-        -> trained OSNet Re-ID embeddings
+        -> ByteTrack tracking
+        -> person crops
+        -> OSNet Re-ID embeddings
 
-FAISS matching, temporal evidence, and global identity assignment
-remain separate phases.
+Phase 13:
+    track summaries
+        -> cross-camera Re-ID matching
+        -> temporal/topology evidence
+        -> global identity assignment
 """
 
 from __future__ import annotations
 
-import logging
-import shutil
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Any
 
 import cv2
+import yaml
 
-from src.config import PROJECT_ROOT, load_config
-from src.crops import CropExtractor
-from src.crops.crop_extractor import should_save_frame
-from src.crops.types import write_crops_csv
-from src.data.video_validator import VIDEO_EXTENSIONS, validate_video
-from src.detection import Detector
+from src.crops.crop_extractor import CropExtractor
+from src.data.video_validator import validate_video
+from src.detection.detector import Detector
+from src.matching.cross_camera_matcher import CrossCameraMatcher
+from src.matching.types import TrackReference
 from src.pipeline.types import (
+    GlobalIdentityResult,
     MultiVideoAnalysisResult,
     VideoAnalysisResult,
     VideoInput,
 )
-from src.reid import ReIDEmbedder
-from src.tracking import Tracker
-from src.tracking.types import TrackedPerson, write_tracks_csv
-
-
-logger = logging.getLogger(__name__)
+from src.reid.embedder import ReIDEmbedder
+from src.temporal.topology import CameraTopology
+from src.temporal.track_summary import TrackSummaryBuilder
+from src.tracking.tracker import Tracker
 
 
 class MultiVideoPipelineError(RuntimeError):
-    """Raised when the multi-video pipeline cannot be initialized or executed."""
+    """Raised when multi-video analysis cannot be completed."""
 
 
 class MultiVideoPipeline:
-    """Validate and coordinate multiple uploaded videos."""
+    """Coordinate multi-camera video analysis."""
 
     def __init__(
         self,
-        min_videos: int = 2,
-        max_videos: int = 3,
-        config: Optional[dict] = None,
+        config_path: str | Path = "configs/config.yaml",
+        reid_config_path: str | Path = "configs/reid.yaml",
     ) -> None:
-        if min_videos < 1:
+        self.config_path = Path(config_path)
+        self.reid_config_path = Path(reid_config_path)
+
+        self.config = self._load_yaml(self.config_path)
+        self.reid_config = self._load_yaml(self.reid_config_path)
+
+    # ------------------------------------------------------------------
+    # Configuration
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_yaml(path: Path) -> dict[str, Any]:
+        """Load a YAML configuration file."""
+
+        if not path.exists():
             raise MultiVideoPipelineError(
-                "min_videos must be at least 1"
+                f"Configuration file does not exist: {path}"
             )
 
-        if max_videos < min_videos:
+        try:
+            with path.open("r", encoding="utf-8") as file:
+                data = yaml.safe_load(file)
+        except Exception as exc:
             raise MultiVideoPipelineError(
-                "max_videos must be greater than or equal to min_videos"
+                f"Failed to load configuration file: {path}"
+            ) from exc
+
+        if data is None:
+            return {}
+
+        if not isinstance(data, dict):
+            raise MultiVideoPipelineError(
+                f"Configuration must contain a mapping: {path}"
             )
 
-        self.min_videos = min_videos
-        self.max_videos = max_videos
-        self.config = config
+        return data
+
+    # ------------------------------------------------------------------
+    # Input validation
+    # ------------------------------------------------------------------
 
     def validate_inputs(
         self,
-        videos: Iterable[VideoInput],
+        video_inputs: (
+            list[VideoInput]
+            | tuple[VideoInput, ...]
+            | None
+        ),
     ) -> tuple[VideoInput, ...]:
-        """Validate the uploaded video collection."""
+        """Validate and normalize 2–3 video inputs."""
 
-        if videos is None:
+        if video_inputs is None:
             raise MultiVideoPipelineError(
                 "Video inputs cannot be None"
             )
 
-        video_list = tuple(videos)
+        inputs = tuple(video_inputs)
 
-        if len(video_list) < self.min_videos:
+        if len(inputs) < 2:
             raise MultiVideoPipelineError(
-                f"At least {self.min_videos} videos are required; "
-                f"received {len(video_list)}"
+                "At least 2 videos are required"
             )
 
-        if len(video_list) > self.max_videos:
+        if len(inputs) > 3:
             raise MultiVideoPipelineError(
-                f"At most {self.max_videos} videos are supported; "
-                f"received {len(video_list)}"
+                "At most 3 videos are supported"
             )
 
-        camera_ids: set[str] = set()
+        camera_ids = [video.camera_id for video in inputs]
 
-        for video in video_list:
-            if not isinstance(video, VideoInput):
-                raise MultiVideoPipelineError(
-                    "All inputs must be VideoInput objects"
-                )
+        if len(camera_ids) != len(set(camera_ids)):
+            raise MultiVideoPipelineError(
+                "Duplicate camera_id values are not allowed"
+            )
 
-            if video.camera_id in camera_ids:
-                raise MultiVideoPipelineError(
-                    f"Duplicate camera_id: {video.camera_id}"
-                )
+        supported_extensions = {
+            ".mp4",
+            ".avi",
+            ".mov",
+            ".mkv",
+            ".m4v",
+        }
 
-            camera_ids.add(video.camera_id)
-
+        for video in inputs:
             path = Path(video.video_path)
-
-            if path.suffix.lower() not in VIDEO_EXTENSIONS:
-                raise MultiVideoPipelineError(
-                    f"Unsupported video format for "
-                    f"'{video.video_path}'. Supported formats: "
-                    f"{', '.join(sorted(VIDEO_EXTENSIONS))}"
-                )
 
             if not path.exists():
                 raise MultiVideoPipelineError(
-                    f"Video file does not exist: {video.video_path}"
+                    f"Video file does not exist: {path}"
                 )
 
             if not path.is_file():
                 raise MultiVideoPipelineError(
-                    f"Video path is not a file: {video.video_path}"
+                    f"Video path is not a file: {path}"
+                )
+
+            if path.suffix.lower() not in supported_extensions:
+                raise MultiVideoPipelineError(
+                    f"Unsupported video format: {path.suffix}"
                 )
 
             validation = validate_video(path)
 
-            if validation["status"] != "READABLE":
+            if validation.get("status") != "READABLE":
                 raise MultiVideoPipelineError(
-                    f"Video is unreadable: {video.video_path}"
+                    f"Video is unreadable: {path}"
                 )
 
-        return video_list
+        return inputs
+
+    # ------------------------------------------------------------------
+    # Phase 11 preparation API
+    # ------------------------------------------------------------------
 
     def prepare_analysis(
         self,
-        videos: Iterable[VideoInput],
+        video_inputs: (
+            list[VideoInput]
+            | tuple[VideoInput, ...]
+            | None
+        ),
     ) -> MultiVideoAnalysisResult:
-        """Validate videos and create an initial analysis result."""
+        """Validate videos and prepare an analysis result."""
 
-        validated_videos = self.validate_inputs(videos)
+        validated_inputs = self.validate_inputs(video_inputs)
 
-        results = tuple(
+        videos = tuple(
             VideoAnalysisResult(
                 camera_id=video.camera_id,
-                video_path=video.video_path,
+                video_path=str(video.video_path),
                 status="ready",
             )
-            for video in validated_videos
+            for video in validated_inputs
         )
 
         return MultiVideoAnalysisResult(
             status="ready",
-            videos=results,
+            videos=videos,
             unique_global_people=0,
+            global_identities=(),
+            error=None,
         )
 
-    def _load_pipeline_config(
-        self,
-        config_path: str | Path = "configs/config.yaml",
-    ) -> dict:
-        """Load the main application configuration."""
+    # ------------------------------------------------------------------
+    # Configuration helpers
+    # ------------------------------------------------------------------
 
-        if self.config is not None:
-            return self.config
+    def _get_detection_config(self) -> dict[str, Any]:
+        """Return detection configuration."""
 
-        return load_config(
-            str(config_path),
-            apply_env=False,
-        )
+        detection = self.config.get("detection", {})
 
-    @staticmethod
-    def _load_reid_config(
-        reid_config_path: str | Path = "configs/reid.yaml",
-    ) -> dict:
-        """Load the dedicated trained Re-ID configuration."""
+        if not isinstance(detection, dict):
+            return {}
 
-        config = load_config(
-            str(reid_config_path),
-            apply_env=False,
-        )
+        return detection
 
-        reid_config = config.get("reid", {})
+    def _get_tracking_config(self) -> dict[str, Any]:
+        """Return tracking configuration."""
 
-        if not isinstance(reid_config, dict):
-            raise MultiVideoPipelineError(
-                "The reid section in configs/reid.yaml must be a mapping"
-            )
+        tracking = self.config.get("tracking", {})
 
-        return reid_config
+        if not isinstance(tracking, dict):
+            return {}
 
-    @staticmethod
-    def _resolve_output_directory(
-        configured_directory: str | Path,
-        camera_id: str,
-    ) -> Path:
-        """Resolve the camera-specific output directory."""
+        return tracking
 
-        output = Path(configured_directory)
+    def _get_crop_config(self) -> dict[str, Any]:
+        """Return crop configuration."""
 
-        if not output.is_absolute():
-            output = PROJECT_ROOT / output
+        crops = self.config.get("crops", {})
 
-        return output / camera_id
+        if not isinstance(crops, dict):
+            return {}
 
-    @staticmethod
-    def _clean_camera_outputs(
-        camera_id: str,
-        cfg: dict,
-        reid_config: dict,
-    ) -> None:
-        """Remove stale generated outputs for one camera before a new run.
+        return crops
 
-        Only generated outputs belonging to the specified camera are removed.
-        Source videos, trained models, configurations, source code, and tests
-        are never touched.
-        """
+    def _get_reid_config(self) -> dict[str, Any]:
+        """Return Re-ID configuration."""
 
-        output_directories = [
-            MultiVideoPipeline._resolve_output_directory(
-                cfg.get("crops", {}).get(
-                    "output_dir",
-                    "outputs/crops",
-                ),
-                camera_id,
-            ),
-            MultiVideoPipeline._resolve_output_directory(
-                cfg.get("tracking", {}).get(
-                    "output_dir",
-                    "outputs/tracking",
-                ),
-                camera_id,
-            ),
-            MultiVideoPipeline._resolve_output_directory(
-                reid_config.get(
-                    "output_dir",
-                    "outputs/embeddings",
-                ),
-                camera_id,
-            ),
-        ]
+        reid = self.reid_config.get("reid", {})
 
-        for directory in output_directories:
-            if directory.exists():
-                if not directory.is_dir():
-                    raise MultiVideoPipelineError(
-                        f"Expected camera output directory but found "
-                        f"a non-directory path: {directory}"
-                    )
+        if not isinstance(reid, dict):
+            return {}
 
-                logger.info(
-                    "Removing stale camera output: %s",
-                    directory,
-                )
+        return reid
 
-                shutil.rmtree(directory)
+    # ------------------------------------------------------------------
+    # Phase 11 video processing
+    # ------------------------------------------------------------------
 
     def _process_video(
         self,
         video: VideoInput,
-        detector: Detector,
-        cfg: dict,
-        max_frames: Optional[int] = None,
     ) -> VideoAnalysisResult:
-        """Run detection, tracking, and crop extraction for one video."""
+        """Run detection, tracking, crops and Re-ID on one video."""
 
         video_path = Path(video.video_path)
 
-        crop_config = dict(cfg.get("crops", {}))
+        detector: Detector | None = None
+        tracker: Tracker | None = None
+        crop_extractor: CropExtractor | None = None
+        embedder: ReIDEmbedder | None = None
 
-        crop_extractor = CropExtractor(
-            crop_config=crop_config,
-            detector=detector,
-        )
+        try:
+            tracking_config = self._get_tracking_config()
+            crop_config = self._get_crop_config()
 
-        crop_output = self._resolve_output_directory(
-            crop_config.get(
-                "output_dir",
-                "outputs/crops",
-            ),
-            video.camera_id,
-        )
+            # ----------------------------------------------------------
+            # Initialize detector
+            # ----------------------------------------------------------
 
-        crop_output.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+            detector = Detector.from_config(self.config)
 
-        # IMPORTANT:
-        # Every video gets its own ByteTrack instance.
-        tracker = Tracker.from_config(cfg)
+            # ----------------------------------------------------------
+            # Initialize tracker
+            # ----------------------------------------------------------
 
-        metadata = []
-        all_tracks: list[TrackedPerson] = []
-        track_ids: set[int] = set()
+            tracker = Tracker.from_config(self.config)
 
-        frames_processed = 0
-        crops_generated = 0
-        crops_rejected = 0
+            # ----------------------------------------------------------
+            # Initialize crop extractor
+            # ----------------------------------------------------------
+
+            crop_extractor = CropExtractor.from_config(
+                self.config,
+                detector=detector,
+                tracker=tracker,
+            )
+
+            # ----------------------------------------------------------
+            # Prepare output directories
+            # ----------------------------------------------------------
+
+            crop_output_root = Path(
+                str(
+                    crop_config.get(
+                        "output_dir",
+                        "outputs/crops",
+                    )
+                )
+            )
+
+            camera_crop_dir = (
+                crop_output_root / video.camera_id
+            )
+
+            camera_crop_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            tracking_output_root = Path(
+                str(
+                    tracking_config.get(
+                        "output_dir",
+                        "outputs/tracking",
+                    )
+                )
+            )
+
+            tracking_csv = (
+                tracking_output_root
+                / video.camera_id
+                / "tracks.csv"
+            )
+
+            tracking_csv.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            # ----------------------------------------------------------
+            # Remove stale crop data for this camera
+            # ----------------------------------------------------------
+
+            self._clear_camera_crop_directory(
+                camera_crop_dir
+            )
+
+            # ----------------------------------------------------------
+            # Run detection + tracking
+            # ----------------------------------------------------------
+
+            tracking_result = tracker.track_video(
+                video_path=video_path,
+                detector=detector,
+                camera_id=video.camera_id,
+                output_csv=tracking_csv,
+                annotate=False,
+                max_frames=None,
+            )
+
+            tracks = getattr(
+                tracking_result,
+                "tracks",
+                (),
+            )
+
+            frames_processed = int(
+                getattr(
+                    tracking_result,
+                    "frames_processed",
+                    0,
+                )
+            )
+
+            unique_track_ids = {
+                int(getattr(track, "track_id"))
+                for track in tracks
+                if getattr(track, "track_id", None) is not None
+            }
+
+            # ----------------------------------------------------------
+            # Extract person crops
+            # ----------------------------------------------------------
+
+            crops_generated = self._extract_crops_from_tracks(
+                video=video,
+                tracks=tracks,
+                crop_extractor=crop_extractor,
+                camera_crop_dir=camera_crop_dir,
+            )
+            self._filter_reid_quality_tracks(
+                camera_crop_dir
+            )
+
+            # ----------------------------------------------------------
+            # Generate OSNet embeddings
+            # ----------------------------------------------------------
+
+            embeddings_generated = 0
+
+            if camera_crop_dir.exists():
+                embedder = ReIDEmbedder.from_config(
+                    self.reid_config
+                )
+
+                embedding_output_root = Path(
+                    str(
+                        self._get_reid_config().get(
+                            "output_dir",
+                            "outputs/embeddings",
+                        )
+                    )
+                )
+
+                embedding_output_root.mkdir(
+                    parents=True,
+                    exist_ok=True,
+                )
+
+                camera_embedding_dir = (
+                    embedding_output_root
+                    / video.camera_id
+                )
+
+                self._clear_directory_contents(
+                    camera_embedding_dir
+                )
+
+                embedder.extract_directory(
+                    camera_crop_dir,
+                    embedding_output_root,
+                )
+
+                embeddings_generated = (
+                    self._count_embedding_files(
+                        camera_embedding_dir
+                    )
+                )
+
+            return VideoAnalysisResult(
+                camera_id=video.camera_id,
+                video_path=str(video_path),
+                status="completed",
+                frames_processed=frames_processed,
+                tracks_detected=len(unique_track_ids),
+                crops_generated=crops_generated,
+                embeddings_generated=embeddings_generated,
+                output_directory=str(
+                    camera_crop_dir.resolve()
+                ),
+                error=None,
+            )
+
+        except Exception as exc:
+            return VideoAnalysisResult(
+                camera_id=video.camera_id,
+                video_path=str(video_path),
+                status="failed",
+                frames_processed=0,
+                tracks_detected=0,
+                crops_generated=0,
+                embeddings_generated=0,
+                output_directory=None,
+                error=str(exc),
+            )
+
+        finally:
+            self._safe_close(embedder)
+            self._safe_close(crop_extractor)
+            self._safe_close(tracker)
+            self._safe_close(detector)
+
+    # ------------------------------------------------------------------
+    # Crop helpers
+    # ------------------------------------------------------------------
+
+    def _extract_crops_from_tracks(
+        self,
+        video: VideoInput,
+        tracks: Any,
+        crop_extractor: CropExtractor,
+        camera_crop_dir: Path,
+    ) -> int:
+        """Extract crops from the tracks produced by the existing tracker pass."""
+
+        video_path = Path(video.video_path)
+
+        if not video_path.is_file():
+            return 0
 
         cap = cv2.VideoCapture(str(video_path))
 
         if not cap.isOpened():
             cap.release()
+            return 0
 
-            return VideoAnalysisResult(
-                camera_id=video.camera_id,
-                video_path=str(video_path),
-                status="error",
-                output_directory=str(crop_output),
-                error="Video could not be opened by OpenCV",
-            )
+        # Reuse the exact TrackedPerson objects produced by the tracker.
+        # Group them by frame number so no second detection/tracking pass occurs.
+        tracks_by_frame: dict[int, list[Any]] = {}
 
-        fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+        for track in tracks:
+            frame_number = getattr(track, "frame_number", None)
+
+            if frame_number is None:
+                continue
+
+            tracks_by_frame.setdefault(int(frame_number), []).append(track)
+
+        generated = 0
+        frame_number = 0
+        save_every = int(
+            crop_extractor.config["save_every_n_frames"]
+        )
 
         try:
-            while max_frames is None or frames_processed < max_frames:
+            while True:
                 ok, frame = cap.read()
 
                 if not ok or frame is None:
                     break
 
-                timestamp_seconds = (
-                    frames_processed / fps
-                    if fps > 0
-                    else None
-                )
+                frame_tracks = tracks_by_frame.get(frame_number, [])
 
-                detections = detector.detect_frame(
-                    frame=frame,
-                    camera_id=video.camera_id,
-                    frame_number=frames_processed,
-                    timestamp_seconds=timestamp_seconds,
-                )
-
-                tracks = tracker.update(detections)
-
-                # Preserve every ByteTrack record for later
-                # temporal and cross-camera analysis.
-                all_tracks.extend(tracks)
-
-                for track in tracks:
-                    track_ids.add(track.track_id)
-
-                if should_save_frame(
-                    frames_processed,
-                    crop_extractor.config["save_every_n_frames"],
-                ):
-                    for track in tracks:
-                        item, reason = crop_extractor.extract_track_crop(
+                if frame_number % save_every == 0:
+                    for track in frame_tracks:
+                        _, reason = crop_extractor.extract_track_crop(
                             frame=frame,
                             track=track,
                             source_video=video_path,
-                            output_directory=crop_output,
+                            output_directory=camera_crop_dir,
                         )
 
-                        if item is not None:
-                            metadata.append(item)
-                            crops_generated += 1
-                        else:
-                            crops_rejected += 1
+                        if reason is None:
+                            generated += 1
 
-                            logger.debug(
-                                "Rejected crop: camera=%s track=%s "
-                                "frame=%s reason=%s",
-                                video.camera_id,
-                                track.track_id,
-                                track.frame_number,
-                                reason,
-                            )
-
-                frames_processed += 1
-
-        except Exception as exc:
-            logger.exception(
-                "Pipeline processing failed for camera %s",
-                video.camera_id,
-            )
-
-            return VideoAnalysisResult(
-                camera_id=video.camera_id,
-                video_path=str(video_path),
-                status="error",
-                frames_processed=frames_processed,
-                tracks_detected=len(track_ids),
-                crops_generated=crops_generated,
-                embeddings_generated=0,
-                output_directory=str(crop_output),
-                error=str(exc),
-            )
+                frame_number += 1
 
         finally:
             cap.release()
 
-        # ---------------------------------------------------------
-        # Persist ByteTrack tracking metadata.
-        # ---------------------------------------------------------
-        tracking_config = dict(cfg.get("tracking", {}))
-
-        tracking_output = self._resolve_output_directory(
-            tracking_config.get(
-                "output_dir",
-                "outputs/tracking",
-            ),
-            video.camera_id,
-        )
-
-        tracking_output.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-        tracks_csv = tracking_output / "tracks.csv"
-
-        try:
-            write_tracks_csv(
-                all_tracks,
-                tracks_csv,
-            )
-
-        except Exception as exc:
-            logger.exception(
-                "Could not write tracking metadata for camera %s",
-                video.camera_id,
-            )
-
-            return VideoAnalysisResult(
-                camera_id=video.camera_id,
-                video_path=str(video_path),
-                status="error",
-                frames_processed=frames_processed,
-                tracks_detected=len(track_ids),
-                crops_generated=crops_generated,
-                embeddings_generated=0,
-                output_directory=str(crop_output),
-                error=f"Could not write tracking metadata: {exc}",
-            )
-
-        # ---------------------------------------------------------
-        # Persist crop metadata.
-        # ---------------------------------------------------------
-        crops_csv = crop_output / "crops.csv"
-
-        try:
-            write_crops_csv(
-                metadata,
-                crops_csv,
-            )
-
-        except Exception as exc:
-            logger.exception(
-                "Could not write crop metadata for camera %s",
-                video.camera_id,
-            )
-
-            return VideoAnalysisResult(
-                camera_id=video.camera_id,
-                video_path=str(video_path),
-                status="error",
-                frames_processed=frames_processed,
-                tracks_detected=len(track_ids),
-                crops_generated=crops_generated,
-                embeddings_generated=0,
-                output_directory=str(crop_output),
-                error=f"Could not write crop metadata: {exc}",
-            )
-
-        logger.info(
-            "Camera %s preprocessing complete: "
-            "frames=%d tracks=%d crops=%d rejected_crops=%d",
-            video.camera_id,
-            frames_processed,
-            len(track_ids),
-            crops_generated,
-            crops_rejected,
-        )
-
-        return VideoAnalysisResult(
-            camera_id=video.camera_id,
-            video_path=str(video_path),
-            status="completed",
-            frames_processed=frames_processed,
-            tracks_detected=len(track_ids),
-            crops_generated=crops_generated,
-            embeddings_generated=0,
-            output_directory=str(crop_output),
-        )
-
-    def _generate_embeddings(
+        return generated
+    def _filter_reid_quality_tracks(
         self,
-        video_result: VideoAnalysisResult,
-        reid_embedder: ReIDEmbedder,
-        reid_config: dict,
-        max_images: Optional[int] = None,
-    ) -> VideoAnalysisResult:
-        """Generate trained OSNet embeddings for one camera's crops."""
+        camera_crop_dir: Path,
+    ) -> int:
+        """Remove crop images and tracks that do not meet Re-ID quality requirements."""
 
-        crop_directory = Path(
-            video_result.output_directory or ""
+        quality = self._get_reid_config().get(
+            "quality",
+            {},
         )
 
-        if not crop_directory.is_dir():
-            return VideoAnalysisResult(
-                camera_id=video_result.camera_id,
-                video_path=video_result.video_path,
-                status="error",
-                frames_processed=video_result.frames_processed,
-                tracks_detected=video_result.tracks_detected,
-                crops_generated=video_result.crops_generated,
-                embeddings_generated=0,
-                output_directory=video_result.output_directory,
-                error=(
-                    "Crop output directory does not exist: "
-                    f"{crop_directory}"
-                ),
-            )
+        if not isinstance(quality, dict):
+            return 0
 
-        embedding_root = Path(
-            reid_config.get(
-                "output_dir",
-                "outputs/embeddings",
-            )
+        if not quality.get("enabled", False):
+            return 0
+
+        min_valid_crops = int(
+            quality.get("min_valid_crops", 3)
+        )
+        min_crop_width = int(
+            quality.get("min_crop_width", 40)
+        )
+        min_crop_height = int(
+            quality.get("min_crop_height", 80)
+        )
+        min_crop_area = int(
+            quality.get("min_crop_area", 3200)
         )
 
-        if not embedding_root.is_absolute():
-            embedding_root = PROJECT_ROOT / embedding_root
+        if not camera_crop_dir.is_dir():
+            return 0
 
-        result = reid_embedder.extract_directory(
-            input_directory=crop_directory,
-            output_dir=embedding_root,
-            max_images=max_images,
-        )
+        import cv2
 
-        if result.status != "OK":
-            return VideoAnalysisResult(
-                camera_id=video_result.camera_id,
-                video_path=video_result.video_path,
-                status="error",
-                frames_processed=video_result.frames_processed,
-                tracks_detected=video_result.tracks_detected,
-                crops_generated=video_result.crops_generated,
-                embeddings_generated=result.embeddings_generated,
-                output_directory=video_result.output_directory,
-                error=(
-                    "Re-ID embedding extraction failed: "
-                    f"{result.error or result.status}"
-                ),
-            )
+        removed_tracks = 0
 
-        logger.info(
-            "Camera %s embeddings complete: "
-            "embeddings=%d dimension=%s device=%s",
-            video_result.camera_id,
-            result.embeddings_generated,
-            result.embedding_dimension,
-            result.device,
-        )
+        for track_dir in sorted(
+            camera_crop_dir.glob("track_*")
+        ):
+            if not track_dir.is_dir():
+                continue
 
-        return VideoAnalysisResult(
-            camera_id=video_result.camera_id,
-            video_path=video_result.video_path,
-            status="completed",
-            frames_processed=video_result.frames_processed,
-            tracks_detected=video_result.tracks_detected,
-            crops_generated=video_result.crops_generated,
-            embeddings_generated=result.embeddings_generated,
-            output_directory=video_result.output_directory,
-        )
+            valid_crops = 0
 
-    def run(
-        self,
-        videos: Iterable[VideoInput],
-        max_frames: Optional[int] = None,
-        config_path: str | Path = "configs/config.yaml",
-        reid_config_path: str | Path = "configs/reid.yaml",
-    ) -> MultiVideoAnalysisResult:
-        """Run multi-video preprocessing and trained OSNet embeddings."""
-
-        if max_frames is not None:
-            if (
-                not isinstance(max_frames, int)
-                or isinstance(max_frames, bool)
-                or max_frames < 1
+            for crop_path in sorted(
+                track_dir.glob("*.jpg")
             ):
-                raise MultiVideoPipelineError(
-                    "max_frames must be a positive integer or None"
+                image = cv2.imread(
+                    str(crop_path),
+                    cv2.IMREAD_UNCHANGED,
                 )
 
-        validated_videos = self.validate_inputs(videos)
-
-        cfg = self._load_pipeline_config(config_path)
-
-        detection_config = dict(
-            cfg.get("detection", {})
-        )
-
-        if detection_config.get("enabled", True) is not True:
-            raise MultiVideoPipelineError(
-                "Detection is disabled in the pipeline configuration"
-            )
-
-        reid_config = self._load_reid_config(
-            reid_config_path
-        )
-
-        if reid_config.get("enabled", True) is not True:
-            raise MultiVideoPipelineError(
-                "Re-ID is disabled in configs/reid.yaml"
-            )
-
-        detector = Detector.from_config(cfg)
-
-        # Build the Re-ID configuration in the format expected by
-        # ReIDEmbedder.from_config().
-        reid_cfg = {
-            "reid": reid_config,
-        }
-
-        reid_embedder = ReIDEmbedder.from_config(
-            reid_cfg
-        )
-
-        video_results: list[VideoAnalysisResult] = []
-
-        try:
-            for video in validated_videos:
-                # Remove stale generated data for this camera before
-                # starting a new Phase 11 analysis.
-                self._clean_camera_outputs(
-                    camera_id=video.camera_id,
-                    cfg=cfg,
-                    reid_config=reid_config,
-                )
-
-                preprocessing_result = self._process_video(
-                    video=video,
-                    detector=detector,
-                    cfg=cfg,
-                    max_frames=max_frames,
-                )
-
-                if preprocessing_result.status != "completed":
-                    video_results.append(
-                        preprocessing_result
+                if image is None:
+                    crop_path.unlink(
+                        missing_ok=True
                     )
                     continue
 
-                embedding_result = self._generate_embeddings(
-                    video_result=preprocessing_result,
-                    reid_embedder=reid_embedder,
-                    reid_config=reid_config,
-                )
+                height, width = image.shape[:2]
+                area = width * height
 
-                video_results.append(
-                    embedding_result
-                )
+                if (
+                    width < min_crop_width
+                    or height < min_crop_height
+                    or area < min_crop_area
+                ):
+                    crop_path.unlink(
+                        missing_ok=True
+                    )
+                    continue
 
-        finally:
-            detector.close()
+                valid_crops += 1
 
-        failed = [
-            result
+            if valid_crops < min_valid_crops:
+                for remaining_crop in track_dir.glob(
+                    "*.jpg"
+                ):
+                    remaining_crop.unlink(
+                        missing_ok=True
+                    )
+
+                try:
+                    track_dir.rmdir()
+                except OSError:
+                    pass
+
+                removed_tracks += 1
+
+        return removed_tracks
+
+    # Phase 13 cross-camera integration
+    # ------------------------------------------------------------------
+
+    def _run_cross_camera_matching(
+        self,
+        videos: tuple[VideoInput, ...],
+        video_results: tuple[VideoAnalysisResult, ...],
+    ) -> tuple[GlobalIdentityResult, ...]:
+        """Match tracks across cameras and assign global identities."""
+
+        successful_cameras = {
+            result.camera_id
             for result in video_results
-            if result.status != "completed"
-        ]
+            if result.status == "completed"
+        }
 
-        if failed:
-            return MultiVideoAnalysisResult(
-                status="error",
-                videos=tuple(video_results),
-                unique_global_people=0,
-                error=(
-                    f"{len(failed)} of {len(video_results)} "
-                    "video(s) failed during analysis"
-                ),
+        if len(successful_cameras) < 2:
+            return ()
+
+        topology = CameraTopology.from_yaml(
+            self.config_path
+        )
+
+        matcher = CrossCameraMatcher(
+            topology=topology
+        )
+
+        tracks_by_camera: dict[
+            str,
+            list[Any],
+        ] = {}
+
+        embeddings_by_camera: dict[
+            str,
+            dict[int, Path],
+        ] = {}
+
+        # --------------------------------------------------------------
+        # Build track summaries and discover embeddings.
+        # --------------------------------------------------------------
+
+        for video in videos:
+            if video.camera_id not in successful_cameras:
+                continue
+
+            tracks_csv = (
+                Path("outputs")
+                / "tracking"
+                / video.camera_id
+                / "tracks.csv"
             )
 
-        return MultiVideoAnalysisResult(
-            status="completed",
-            videos=tuple(video_results),
-            unique_global_people=0,
+            if not tracks_csv.exists():
+                continue
+
+            # TrackSummaryBuilder requires the CSV path in __init__.
+            track_summary_builder = TrackSummaryBuilder(
+                tracks_csv
+            )
+
+            summaries = track_summary_builder.build()
+
+            tracks_by_camera[
+                video.camera_id
+            ] = summaries
+
+            embeddings_by_camera[
+                video.camera_id
+            ] = self._discover_track_embeddings(
+                video.camera_id
+            )
+
+        if not tracks_by_camera:
+            return ()
+
+        # --------------------------------------------------------------
+        # Preserve the user's supplied camera order.
+        # --------------------------------------------------------------
+
+        ordered_cameras = [
+            video.camera_id
+            for video in videos
+            if video.camera_id in successful_cameras
+        ]
+
+        identity_results: list[
+            GlobalIdentityResult
+        ] = []
+
+        # --------------------------------------------------------------
+        # Seed global identities using the first camera that has
+        # usable track embeddings.
+        # --------------------------------------------------------------
+
+        seeded_camera: str | None = None
+
+        for camera_id in ordered_cameras:
+            camera_tracks = tracks_by_camera.get(
+                camera_id,
+                [],
+            )
+
+            camera_embeddings = embeddings_by_camera.get(
+                camera_id,
+                {},
+            )
+
+            if not camera_embeddings:
+                continue
+
+            for summary in camera_tracks:
+                track_id = int(summary.track_id)
+
+                if track_id not in camera_embeddings:
+                    continue
+
+                reference = TrackReference(
+                    camera_id=camera_id,
+                    track_id=track_id,
+                )
+
+                assignment = (
+                    matcher.identity_pipeline
+                    .assigner
+                    .assign_new_track(
+                        reference
+                    )
+                )
+
+                identity_results.append(
+                    GlobalIdentityResult(
+                        global_person_id=(
+                            assignment.global_person_id
+                        ),
+                        camera_id=camera_id,
+                        track_id=track_id,
+                        decision="new_identity",
+                        score={},
+                        evidence={},
+                        assignment_reason=(
+                            assignment.assignment_reason
+                        ),
+                    )
+                )
+
+            seeded_camera = camera_id
+            break
+
+        if seeded_camera is None:
+            return ()
+
+        # --------------------------------------------------------------
+        # Process remaining cameras.
+        # --------------------------------------------------------------
+
+        seeded_index = ordered_cameras.index(
+            seeded_camera
         )
 
-    def analyze(
+        for camera_index in range(
+            seeded_index + 1,
+            len(ordered_cameras),
+        ):
+            to_camera = ordered_cameras[
+                camera_index
+            ]
+
+            to_tracks = tracks_by_camera.get(
+                to_camera,
+                [],
+            )
+
+            to_embeddings = embeddings_by_camera.get(
+                to_camera,
+                {},
+            )
+
+            if not to_embeddings:
+                continue
+
+            previous_cameras = ordered_cameras[
+                :camera_index
+            ]
+
+            for to_summary in to_tracks:
+                to_track_id = int(
+                    to_summary.track_id
+                )
+
+                to_embedding_path = to_embeddings.get(
+                    to_track_id
+                )
+
+                if to_embedding_path is None:
+                    continue
+
+                best_accept: Any | None = None
+                best_defer: Any | None = None
+
+                # ------------------------------------------------------
+                # Compare this track against tracks from earlier
+                # cameras. Topology and temporal constraints are
+                # enforced by CrossCameraMatcher.
+                # ------------------------------------------------------
+
+                for from_camera in previous_cameras:
+                    from_tracks = tracks_by_camera.get(
+                        from_camera,
+                        [],
+                    )
+
+                    from_embeddings = (
+                        embeddings_by_camera.get(
+                            from_camera,
+                            {},
+                        )
+                    )
+
+                    for from_summary in from_tracks:
+                        from_track_id = int(
+                            from_summary.track_id
+                        )
+
+                        from_embedding_path = (
+                            from_embeddings.get(
+                                from_track_id
+                            )
+                        )
+
+                        if from_embedding_path is None:
+                            continue
+
+                        from_reference = TrackReference(
+                            camera_id=from_camera,
+                            track_id=from_track_id,
+                        )
+
+                        existing_assignment = (
+                            matcher.identity_pipeline
+                            .assigner
+                            .get_assignment(
+                                from_reference
+                            )
+                        )
+
+                        if existing_assignment is None:
+                            continue
+
+                        try:
+                            match_result = (
+                                matcher.match_track_pair(
+                                    from_track=from_summary,
+                                    to_track=to_summary,
+                                    from_embeddings_path=(
+                                        from_embedding_path
+                                    ),
+                                    to_embeddings_path=(
+                                        to_embedding_path
+                                    ),
+                                    target_global_person_id=(
+                                        existing_assignment
+                                        .global_person_id
+                                    ),
+                                )
+                            )
+                        except Exception:
+                            continue
+
+                        if match_result is None:
+                            continue
+
+                        if (
+                            match_result.identity_result
+                            .accepted
+                        ):
+                            if (
+                                best_accept is None
+                                or (
+                                    match_result.score.total_score
+                                    > best_accept.score.total_score
+                                )
+                            ):
+                                best_accept = match_result
+
+                        elif (
+                            match_result.identity_result
+                            .deferred
+                        ):
+                            if (
+                                best_defer is None
+                                or (
+                                    match_result.score.total_score
+                                    > best_defer.score.total_score
+                                )
+                            ):
+                                best_defer = match_result
+
+                # ------------------------------------------------------
+                # ACCEPT takes priority over DEFER.
+                # ------------------------------------------------------
+
+                selected = (
+                    best_accept
+                    if best_accept is not None
+                    else best_defer
+                )
+
+                if selected is not None:
+                    identity_result = (
+                        selected.identity_result
+                    )
+
+                    assignment = (
+                        identity_result.assignment
+                    )
+
+                    if assignment is not None:
+                        identity_results.append(
+                            GlobalIdentityResult(
+                                global_person_id=(
+                                    assignment
+                                    .global_person_id
+                                ),
+                                camera_id=to_camera,
+                                track_id=to_track_id,
+                                decision=(
+                                    identity_result
+                                    .decision
+                                    .decision
+                                    .value
+                                ),
+                                score=(
+                                    selected.score.to_dict()
+                                ),
+                                evidence=(
+                                    identity_result
+                                    .candidate
+                                    .evidence
+                                    .to_dict()
+                                ),
+                                assignment_reason=(
+                                    assignment
+                                    .assignment_reason
+                                ),
+                            )
+                        )
+
+                        continue
+
+                # ------------------------------------------------------
+                # No accepted/deferred candidate:
+                # create a new global identity.
+                # ------------------------------------------------------
+
+                to_reference = TrackReference(
+                    camera_id=to_camera,
+                    track_id=to_track_id,
+                )
+
+                new_assignment = (
+                    matcher.identity_pipeline
+                    .assigner
+                    .assign_new_track(
+                        to_reference
+                    )
+                )
+
+                identity_results.append(
+                    GlobalIdentityResult(
+                        global_person_id=(
+                            new_assignment
+                            .global_person_id
+                        ),
+                        camera_id=to_camera,
+                        track_id=to_track_id,
+                        decision="new_identity",
+                        score={},
+                        evidence={},
+                        assignment_reason=(
+                            new_assignment
+                            .assignment_reason
+                        ),
+                    )
+                )
+
+        return tuple(identity_results)
+
+    # ------------------------------------------------------------------
+    # Embedding discovery
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _discover_track_embeddings(
+        camera_id: str,
+    ) -> dict[int, Path]:
+        """Discover track-level embedding files for one camera."""
+
+        root = (
+            Path("outputs")
+            / "embeddings"
+            / camera_id
+        )
+
+        if not root.exists():
+            return {}
+
+        result: dict[int, Path] = {}
+
+        for embedding_path in root.glob(
+            "track_*/embeddings.npy"
+        ):
+            track_directory = embedding_path.parent
+
+            try:
+                track_id = int(
+                    track_directory.name.split("_")[-1]
+                )
+            except ValueError:
+                continue
+
+            result[track_id] = embedding_path
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Main execution
+    # ------------------------------------------------------------------
+
+    def run(
         self,
-        videos: Iterable[VideoInput],
-        max_frames: Optional[int] = None,
-        config_path: str | Path = "configs/config.yaml",
-        reid_config_path: str | Path = "configs/reid.yaml",
+        video_inputs: (
+            list[VideoInput]
+            | tuple[VideoInput, ...]
+            | None
+        ),
     ) -> MultiVideoAnalysisResult:
-        """Alias for run()."""
+        """Run the complete multi-video analysis pipeline."""
 
-        return self.run(
-            videos=videos,
-            max_frames=max_frames,
-            config_path=config_path,
-            reid_config_path=reid_config_path,
+        try:
+            validated_inputs = self.validate_inputs(
+                video_inputs
+            )
+
+            results: list[
+                VideoAnalysisResult
+            ] = []
+
+            for video in validated_inputs:
+                result = self._process_video(
+                    video
+                )
+
+                results.append(result)
+
+                if result.status != "completed":
+                    return MultiVideoAnalysisResult(
+                        status="failed",
+                        videos=tuple(results),
+                        unique_global_people=0,
+                        global_identities=(),
+                        error=(
+                            result.error
+                            or (
+                                "Video processing failed: "
+                                f"{video.video_path}"
+                            )
+                        ),
+                    )
+
+            video_results = tuple(results)
+
+            # ----------------------------------------------------------
+            # Phase 13
+            # ----------------------------------------------------------
+
+            global_identities = (
+                self._run_cross_camera_matching(
+                    videos=validated_inputs,
+                    video_results=video_results,
+                )
+            )
+
+            unique_global_people = len(
+                {
+                    identity.global_person_id
+                    for identity in global_identities
+                }
+            )
+
+            return MultiVideoAnalysisResult(
+                status="completed",
+                videos=video_results,
+                unique_global_people=(
+                    unique_global_people
+                ),
+                global_identities=(
+                    global_identities
+                ),
+                error=None,
+            )
+
+        except MultiVideoPipelineError:
+            raise
+
+        except Exception as exc:
+            return MultiVideoAnalysisResult(
+                status="failed",
+                videos=(),
+                unique_global_people=0,
+                global_identities=(),
+                error=str(exc),
+            )
+
+    # ------------------------------------------------------------------
+    # Filesystem helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clear_camera_crop_directory(
+        directory: Path,
+    ) -> None:
+        """Remove stale crop files/directories for one camera."""
+
+        if not directory.exists():
+            directory.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            return
+
+        for child in directory.iterdir():
+            if child.is_dir():
+                MultiVideoPipeline._remove_directory(
+                    child
+                )
+            else:
+                child.unlink(
+                    missing_ok=True
+                )
+
+    @staticmethod
+    def _clear_directory_contents(
+        directory: Path,
+    ) -> None:
+        """Clear all files/directories below a path."""
+
+        if not directory.exists():
+            directory.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            return
+
+        for child in directory.iterdir():
+            if child.is_dir():
+                MultiVideoPipeline._remove_directory(
+                    child
+                )
+            else:
+                child.unlink(
+                    missing_ok=True
+                )
+
+    @staticmethod
+    def _remove_directory(
+        directory: Path,
+    ) -> None:
+        """Recursively remove a directory."""
+
+        if not directory.exists():
+            return
+
+        for child in directory.iterdir():
+            if child.is_dir():
+                MultiVideoPipeline._remove_directory(
+                    child
+                )
+            else:
+                child.unlink(
+                    missing_ok=True
+                )
+
+        directory.rmdir()
+
+    @staticmethod
+    def _count_crop_images(
+        directory: Path,
+    ) -> int:
+        """Count generated crop images."""
+
+        if not directory.exists():
+            return 0
+
+        extensions = {
+            ".jpg",
+            ".jpeg",
+            ".png",
+        }
+
+        return sum(
+            1
+            for path in directory.rglob("*")
+            if path.is_file()
+            and path.suffix.lower() in extensions
         )
 
+    @staticmethod
+    def _count_embedding_files(
+        directory: Path,
+    ) -> int:
+        """Count track-level embedding files."""
 
-__all__ = [
-    "MultiVideoPipeline",
-    "MultiVideoPipelineError",
-]
+        if not directory.exists():
+            return 0
+
+        return sum(
+            1
+            for path in directory.rglob(
+                "embeddings.npy"
+            )
+            if path.is_file()
+        )
+
+    @staticmethod
+    def _safe_close(
+        component: Any,
+    ) -> None:
+        """Safely close a pipeline component if supported."""
+
+        if component is None:
+            return
+
+        close_method = getattr(
+            component,
+            "close",
+            None,
+        )
+
+        if callable(close_method):
+            try:
+                close_method()
+            except Exception:
+                pass

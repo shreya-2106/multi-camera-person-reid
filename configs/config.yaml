@@ -54,9 +54,9 @@ crops:
   # Phase 5: prepare high-quality local-track crops for future Re-ID only.
   enabled: true
   output_dir: "outputs/crops"
-  min_width: 40
-  min_height: 80
-  min_area: 3200
+  min_width: 20
+  min_height: 40
+  min_area: 800
   padding: 0.05
   save_every_n_frames: 5
 
@@ -71,6 +71,9 @@ reid:
   normalize_embeddings: true
   output_dir: "outputs/embeddings"
 
+
+
+
 matching:
   enabled: false
   index: "faiss"
@@ -79,3 +82,47 @@ dashboard:
   enabled: false
   host: "0.0.0.0"
   port: 8050
+topology:
+  enabled: true
+
+  cameras:
+    CAM01:
+      outgoing:
+        - CAM02
+        - CAM03
+
+    CAM02:
+      outgoing:
+        - CAM04
+
+    CAM03:
+      outgoing:
+        - CAM04
+
+    CAM04:
+      outgoing: []
+
+  transitions:
+    CAM01_to_CAM02:
+      from_camera: "CAM01"
+      to_camera: "CAM02"
+      min_travel_time_seconds: 2.0
+      max_travel_time_seconds: 30.0
+
+    CAM01_to_CAM03:
+      from_camera: "CAM01"
+      to_camera: "CAM03"
+      min_travel_time_seconds: 2.0
+      max_travel_time_seconds: 30.0
+
+    CAM02_to_CAM04:
+      from_camera: "CAM02"
+      to_camera: "CAM04"
+      min_travel_time_seconds: 2.0
+      max_travel_time_seconds: 30.0
+
+    CAM03_to_CAM04:
+      from_camera: "CAM03"
+      to_camera: "CAM04"
+      min_travel_time_seconds: 2.0
+      max_travel_time_seconds: 30.0

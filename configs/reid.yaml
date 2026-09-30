@@ -12,10 +12,17 @@ reid:
   output_dir: "outputs/embeddings"
   checkpoint: "models/osnet_market1501_epoch_3.pth"
 
+  quality:
+    enabled: true
+    min_valid_crops: 3
+    min_crop_width: 40
+    min_crop_height: 80
+    min_crop_area: 3200
+
 matching:
-  similarity_metric: "cosine"   # cosine | euclidean
+  similarity_metric: "cosine"
   similarity_threshold: 0.6
-  index_type: "faiss_flat"      # implemented in Phase 3
+  index_type: "faiss_flat"
 
 data:
   gallery_dir: "data/reid/gallery"

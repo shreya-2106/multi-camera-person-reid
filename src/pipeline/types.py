@@ -70,6 +70,51 @@ class VideoAnalysisResult:
 
 
 @dataclass(frozen=True)
+class GlobalIdentityResult:
+    """Serializable result for one global person identity."""
+
+    global_person_id: int
+    camera_id: str
+    track_id: int
+    decision: str
+    score: dict
+    evidence: dict
+    assignment_reason: str
+
+    def __post_init__(self) -> None:
+        if self.global_person_id < 1:
+            raise ValueError(
+                "global_person_id must be a positive integer"
+            )
+
+        if not self.camera_id:
+            raise ValueError("camera_id must be non-empty")
+
+        if self.track_id < 0:
+            raise ValueError(
+                "track_id must be a non-negative integer"
+            )
+
+        if not self.decision:
+            raise ValueError("decision must be non-empty")
+
+        if not isinstance(self.score, dict):
+            raise ValueError("score must be a dictionary")
+
+        if not isinstance(self.evidence, dict):
+            raise ValueError("evidence must be a dictionary")
+
+        if not self.assignment_reason:
+            raise ValueError(
+                "assignment_reason must be non-empty"
+            )
+
+    def to_dict(self) -> dict:
+        """Convert the identity result to a dictionary."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class MultiVideoAnalysisResult:
     """Overall result for a multi-video analysis request."""
 
@@ -77,6 +122,7 @@ class MultiVideoAnalysisResult:
     videos: tuple[VideoAnalysisResult, ...]
 
     unique_global_people: int = 0
+    global_identities: tuple[GlobalIdentityResult, ...] = ()
 
     error: Optional[str] = None
 
@@ -98,5 +144,9 @@ class MultiVideoAnalysisResult:
                 for video in self.videos
             ],
             "unique_global_people": self.unique_global_people,
+            "global_identities": [
+                identity.to_dict()
+                for identity in self.global_identities
+            ],
             "error": self.error,
         }
