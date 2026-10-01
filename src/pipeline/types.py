@@ -65,7 +65,7 @@ class VideoAnalysisResult:
                 )
 
     def to_dict(self) -> dict:
-        """Convert the analysis result to a dictionary."""
+        """Convert the video analysis result to a dictionary."""
         return asdict(self)
 
 
@@ -123,6 +123,7 @@ class MultiVideoAnalysisResult:
 
     unique_global_people: int = 0
     global_identities: tuple[GlobalIdentityResult, ...] = ()
+    candidate_reports: tuple[dict, ...] = ()
 
     error: Optional[str] = None
 
@@ -134,6 +135,17 @@ class MultiVideoAnalysisResult:
             raise ValueError(
                 "unique_global_people must be non-negative"
             )
+
+        if not isinstance(self.candidate_reports, tuple):
+            raise ValueError(
+                "candidate_reports must be a tuple"
+            )
+
+        for report in self.candidate_reports:
+            if not isinstance(report, dict):
+                raise ValueError(
+                    "Each candidate report must be a dictionary"
+                )
 
     def to_dict(self) -> dict:
         """Convert the complete result to a dictionary."""
@@ -148,5 +160,8 @@ class MultiVideoAnalysisResult:
                 identity.to_dict()
                 for identity in self.global_identities
             ],
+            "candidate_reports": list(
+                self.candidate_reports
+            ),
             "error": self.error,
         }

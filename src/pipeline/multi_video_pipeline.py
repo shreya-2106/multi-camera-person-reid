@@ -100,7 +100,7 @@ class MultiVideoPipeline:
             | None
         ),
     ) -> tuple[VideoInput, ...]:
-        """Validate and normalize 2–3 video inputs."""
+        """Validate and normalize 2-3 video inputs."""
 
         if video_inputs is None:
             raise MultiVideoPipelineError(
@@ -623,7 +623,10 @@ class MultiVideoPipeline:
         self,
         videos: tuple[VideoInput, ...],
         video_results: tuple[VideoAnalysisResult, ...],
-    ) -> tuple[GlobalIdentityResult, ...]:
+    ) -> tuple[
+        tuple[GlobalIdentityResult, ...],
+        tuple[dict, ...],
+    ]:
         """Match tracks across cameras and assign global identities."""
 
         successful_cameras = {
@@ -633,7 +636,7 @@ class MultiVideoPipeline:
         }
 
         if len(successful_cameras) < 2:
-            return ()
+            return (), ()
 
         topology = CameraTopology.from_yaml(
             self.config_path
@@ -689,7 +692,7 @@ class MultiVideoPipeline:
             )
 
         if not tracks_by_camera:
-            return ()
+            return (), ()
 
         # --------------------------------------------------------------
         # Preserve the user's supplied camera order.
@@ -704,6 +707,8 @@ class MultiVideoPipeline:
         identity_results: list[
             GlobalIdentityResult
         ] = []
+
+        candidate_reports: list[dict] = []
 
         # --------------------------------------------------------------
         # Seed global identities using the first camera that has
@@ -765,7 +770,7 @@ class MultiVideoPipeline:
             break
 
         if seeded_camera is None:
-            return ()
+            return (), ()
 
         # --------------------------------------------------------------
         # Process remaining cameras.
@@ -887,6 +892,10 @@ class MultiVideoPipeline:
                         if match_result is None:
                             continue
 
+                        candidate_reports.append(
+                            match_result.report.to_dict()
+                        )
+
                         if (
                             match_result.identity_result
                             .accepted
@@ -1001,7 +1010,10 @@ class MultiVideoPipeline:
                     )
                 )
 
-        return tuple(identity_results)
+        return (
+            tuple(identity_results),
+            tuple(candidate_reports),
+        )
 
     # ------------------------------------------------------------------
     # Embedding discovery
@@ -1091,7 +1103,7 @@ class MultiVideoPipeline:
             # Phase 13
             # ----------------------------------------------------------
 
-            global_identities = (
+            global_identities, candidate_reports = (
                 self._run_cross_camera_matching(
                     videos=validated_inputs,
                     video_results=video_results,
@@ -1113,6 +1125,9 @@ class MultiVideoPipeline:
                 ),
                 global_identities=(
                     global_identities
+                ),
+                candidate_reports=(
+                    candidate_reports
                 ),
                 error=None,
             )
