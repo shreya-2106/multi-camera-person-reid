@@ -1,4 +1,4 @@
-"""Phase 12 cross-camera Re-ID integration.
+﻿"""Phase 12 cross-camera Re-ID integration.
 
 This module connects the existing Phase 8, Phase 9, and Phase 10
 components without replacing their responsibilities.
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-
+from src.matching.candidate_report import CandidateReport
 from src.matching.identity_assigner import IdentityCandidate
 from src.matching.identity_pipeline import (
     GlobalIdentityPipeline,
@@ -52,6 +52,7 @@ class CrossCameraMatchResult:
     transition: TransitionCandidate
     score: CandidateScore
     identity_result: IdentityPipelineResult
+    report: CandidateReport
 
     def to_dict(self) -> dict:
         """Convert the result to a serializable dictionary."""
@@ -62,6 +63,7 @@ class CrossCameraMatchResult:
             "transition": self.transition.to_dict(),
             "score": self.score.to_dict(),
             "identity_result": self.identity_result.to_dict(),
+            "report": self.report.to_dict(),
         }
 
 
@@ -224,11 +226,6 @@ class CrossCameraMatcher:
 
         candidate, score = built
 
-        identity_result = self.process_candidate(
-            candidate,
-            score,
-        )
-
         transition = self.build_transition(
             from_track,
             to_track,
@@ -236,6 +233,28 @@ class CrossCameraMatcher:
 
         if transition is None:
             return None
+
+        identity_result = self.process_candidate(
+            candidate,
+            score,
+        )
+
+        evidence = self.evidence_builder.build(
+            transition,
+            similarity,
+        )
+
+        report = CandidateReport(
+            from_camera=from_track.camera_id,
+            from_track_id=from_track.track_id,
+            to_camera=to_track.camera_id,
+            to_track_id=to_track.track_id,
+            status="valid",
+            travel_time_seconds=transition.travel_time_seconds,
+            transition=transition,
+            evidence=evidence,
+            score=score,
+        )
 
         return CrossCameraMatchResult(
             from_track=TrackReference(
@@ -250,4 +269,5 @@ class CrossCameraMatcher:
             transition=transition,
             score=score,
             identity_result=identity_result,
+            report=report,
         )
