@@ -77,8 +77,8 @@ class GlobalIdentityResult:
     camera_id: str
     track_id: int
     decision: str
-    score: dict
-    evidence: dict
+    score: Optional[dict]
+    evidence: Optional[dict]
     assignment_reason: str
 
     def __post_init__(self) -> None:
@@ -98,11 +98,10 @@ class GlobalIdentityResult:
         if not self.decision:
             raise ValueError("decision must be non-empty")
 
-        if not isinstance(self.score, dict):
-            raise ValueError("score must be a dictionary")
-
-        if not isinstance(self.evidence, dict):
-            raise ValueError("evidence must be a dictionary")
+        if self.score is not None and not isinstance(self.score, dict):
+            raise ValueError("score must be a dictionary or None")
+        if self.evidence is not None and not isinstance(self.evidence, dict):
+            raise ValueError("evidence must be a dictionary or None")
 
         if not self.assignment_reason:
             raise ValueError(

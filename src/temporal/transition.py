@@ -121,6 +121,52 @@ class TransitionCandidateBuilder:
             entry_time=to_track.start_time,
             travel_time_seconds=travel_time,
         )
+        def explain_pair(
+        self,
+        from_track: TrackSummary,
+        to_track: TrackSummary,
+           ) -> dict:
+    
+         """Explain why a cross-camera transition pair is valid or rejected."""
+
+        if from_track.camera_id == to_track.camera_id:
+            return {
+                "status": "rejected",
+                "reason": "same_camera",
+                "travel_time_seconds": None,
+            }
+
+        if not self.topology.can_transition(
+            from_track.camera_id,
+            to_track.camera_id,
+        ):
+            return {
+                "status": "rejected",
+                "reason": "invalid_topology",
+                "travel_time_seconds": None,
+            }
+
+        travel_time = (
+            to_track.start_time
+            - from_track.end_time
+        )
+
+        if not self.topology.is_travel_time_valid(
+            from_track.camera_id,
+            to_track.camera_id,
+            travel_time,
+        ):
+            return {
+                "status": "rejected",
+                "reason": "invalid_travel_time",
+                "travel_time_seconds": travel_time,
+            }
+
+        return {
+            "status": "valid",
+            "reason": None,
+            "travel_time_seconds": travel_time,
+        }
 
     def build(
         self,

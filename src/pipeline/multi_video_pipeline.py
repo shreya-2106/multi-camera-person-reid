@@ -758,8 +758,8 @@ class MultiVideoPipeline:
                         camera_id=camera_id,
                         track_id=track_id,
                         decision="new_identity",
-                        score={},
-                        evidence={},
+                        score=None,
+                        evidence=None,
                         assignment_reason=(
                             assignment.assignment_reason
                         ),
@@ -868,28 +868,55 @@ class MultiVideoPipeline:
 
                         if existing_assignment is None:
                             continue
-
                         try:
-                            match_result = (
-                                matcher.match_track_pair(
-                                    from_track=from_summary,
-                                    to_track=to_summary,
-                                    from_embeddings_path=(
-                                        from_embedding_path
-                                    ),
-                                    to_embeddings_path=(
-                                        to_embedding_path
-                                    ),
-                                    target_global_person_id=(
-                                        existing_assignment
-                                        .global_person_id
-                                    ),
-                                )
+                            match_result = matcher.match_track_pair(
+                                from_track=from_summary,
+                                to_track=to_summary,
+                                from_embeddings_path=from_embedding_path,
+                                to_embeddings_path=to_embedding_path,
+                                target_global_person_id=(
+                                    existing_assignment
+                                    .global_person_id
+                                ),
                             )
                         except Exception:
                             continue
 
                         if match_result is None:
+                            explanation = (
+                                matcher.transition_builder.explain_pair(
+                                    from_summary,
+                                    to_summary,
+                                )
+                            )
+
+                            candidate_reports.append(
+                                {
+                                    "from_camera": (
+                                        from_summary.camera_id
+                                    ),
+                                    "from_track_id": int(
+                                        from_summary.track_id
+                                    ),
+                                    "to_camera": (
+                                        to_summary.camera_id
+                                    ),
+                                    "to_track_id": int(
+                                        to_summary.track_id
+                                    ),
+                                    "status": explanation["status"],
+                                    "reason": explanation["reason"],
+                                    "travel_time_seconds": (
+                                        explanation[
+                                            "travel_time_seconds"
+                                        ]
+                                    ),
+                                    "transition": None,
+                                    "evidence": None,
+                                    "score": None,
+                                }
+                            )
+
                             continue
 
                         candidate_reports.append(
@@ -1001,8 +1028,8 @@ class MultiVideoPipeline:
                         camera_id=to_camera,
                         track_id=to_track_id,
                         decision="new_identity",
-                        score={},
-                        evidence={},
+                        score=None,
+                        evidence=None,
                         assignment_reason=(
                             new_assignment
                             .assignment_reason
