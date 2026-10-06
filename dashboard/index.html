@@ -1,0 +1,399 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+    <title>Multi-Camera Re-ID</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="app">
+
+        <!-- AUTH -->
+        <section id="auth-screen" class="screen auth-screen">
+            <div class="auth-card">
+                <div class="brand">
+                    <span class="brand-mark">◈</span>
+                    <div>
+                        <strong>Multi-Camera Re-ID</strong>
+                        <span>Intelligent surveillance platform</span>
+                    </div>
+                </div>
+
+                <div id="login-view">
+                    <div class="auth-heading">
+                        <h1>Welcome back</h1>
+                        <p>Sign in to continue your investigation.</p>
+                    </div>
+
+                    <form id="login-form">
+                        <label>
+                            Email
+                            <input
+                                id="login-email"
+                                type="email"
+                                required
+                                autocomplete="email"
+                            >
+                        </label>
+
+                        <label>
+                            Password
+                            <input
+                                id="login-password"
+                                type="password"
+                                required
+                                autocomplete="current-password"
+                            >
+                        </label>
+
+                        <button class="primary-button" type="submit">
+                            Sign in
+                        </button>
+
+                        <p id="login-error" class="form-error"></p>
+                    </form>
+
+                    <p class="auth-switch">
+                        Don't have an account?
+                        <button id="show-register" type="button">
+                            Create account
+                        </button>
+                    </p>
+                </div>
+
+                <div id="register-view" class="hidden">
+                    <div class="auth-heading">
+                        <h1>Create account</h1>
+                        <p>Set up your secure investigation workspace.</p>
+                    </div>
+
+                    <form id="register-form">
+                        <label>
+                            Name
+                            <input
+                                id="register-name"
+                                type="text"
+                                required
+                                autocomplete="name"
+                            >
+                        </label>
+
+                        <label>
+                            Email
+                            <input
+                                id="register-email"
+                                type="email"
+                                required
+                                autocomplete="email"
+                            >
+                        </label>
+
+                        <label>
+                            Password
+                            <input
+                                id="register-password"
+                                type="password"
+                                required
+                                autocomplete="new-password"
+                            >
+                        </label>
+
+                        <label>
+                            Confirm password
+                            <input
+                                id="register-confirm"
+                                type="password"
+                                required
+                                autocomplete="new-password"
+                            >
+                        </label>
+
+                        <button class="primary-button" type="submit">
+                            Create account
+                        </button>
+
+                        <p id="register-error" class="form-error"></p>
+                    </form>
+
+                    <p class="auth-switch">
+                        Already have an account?
+                        <button id="show-login" type="button">
+                            Sign in
+                        </button>
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- APPLICATION -->
+        <section id="app-screen" class="screen hidden">
+            <header class="topbar">
+                <div class="brand">
+                    <span class="brand-mark">◈</span>
+                    <div>
+                        <strong>Multi-Camera Re-ID</strong>
+                        <span>Intelligent surveillance</span>
+                    </div>
+                </div>
+
+                <nav>
+                    <button data-page="search" class="nav-button active">
+                        New Search
+                    </button>
+                    <button data-page="history" class="nav-button">
+                        History
+                    </button>
+                    <button data-page="profile" class="nav-button">
+                        Profile
+                    </button>
+                    <button id="logout-button" class="nav-button">
+                        Logout
+                    </button>
+                </nav>
+            </header>
+
+            <main class="content">
+
+                <!-- SEARCH -->
+                <section id="page-search" class="page">
+                    <div class="page-heading">
+                        <div>
+                            <p class="eyebrow">Investigation</p>
+                            <h1>New search</h1>
+                            <p>
+                                Upload footage from multiple cameras to investigate
+                                a person's movement across the scene.
+                            </p>
+                        </div>
+                    </div>
+
+                    <form id="search-form">
+                        <div class="form-section">
+                            <label>
+                                Case name
+                                <input
+                                    id="case-name"
+                                    type="text"
+                                    placeholder="e.g. Station entrance investigation"
+                                    required
+                                >
+                            </label>
+                        </div>
+
+                        <div class="section-heading">
+                            <div>
+                                <h2>Camera footage</h2>
+                                <p>Add two or more camera recordings.</p>
+                            </div>
+
+                            <button
+                                id="add-camera"
+                                class="secondary-button"
+                                type="button"
+                            >
+                                + Add camera
+                            </button>
+                        </div>
+
+                        <div id="camera-list" class="camera-grid"></div>
+
+                        <div class="run-area">
+                            <p id="search-error" class="form-error"></p>
+
+                            <button
+                                id="run-analysis"
+                                class="primary-button large"
+                                type="submit"
+                            >
+                                Run analysis
+                            </button>
+                        </div>
+                    </form>
+                </section>
+
+                <!-- PROCESSING -->
+                <section id="page-processing" class="page hidden">
+                    <div class="page-heading centered">
+                        <p class="eyebrow">Processing</p>
+                        <h1>Analyzing camera footage</h1>
+                        <p>
+                            Your investigation is being processed.
+                        </p>
+                    </div>
+
+                    <div id="processing-cameras" class="processing-list"></div>
+                </section>
+
+                <!-- RESULTS -->
+                <section id="page-results" class="page hidden">
+                    <div class="result-header">
+                        <div>
+                            <p class="eyebrow">Investigation result</p>
+                            <h1>Analysis complete</h1>
+                        </div>
+
+                        <div class="result-actions">
+                            <button
+                                id="export-result"
+                                class="secondary-button"
+                                type="button"
+                            >
+                                Export report
+                            </button>
+
+                            <button
+                                id="flag-result"
+                                class="danger-button"
+                                type="button"
+                            >
+                                Flag incorrect
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="match-banner" class="match-banner"></div>
+
+                    <div class="result-grid">
+                        <section class="panel identity-panel">
+                            <span class="panel-label">Matched identity</span>
+                            <h2 id="identity-label">—</h2>
+
+                            <div class="confidence">
+                                <div>
+                                    <span>Overall confidence</span>
+                                    <strong id="overall-confidence">—</strong>
+                                </div>
+
+                                <div class="confidence-bar">
+                                    <span id="confidence-fill"></span>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="panel">
+                            <div class="section-heading">
+                                <div>
+                                    <h2>Camera evidence</h2>
+                                    <p>Evidence generated for each camera.</p>
+                                </div>
+                            </div>
+
+                            <div id="result-cameras"></div>
+                        </section>
+
+                        <section class="panel">
+                            <div class="section-heading">
+                                <div>
+                                    <h2>Appearance evidence</h2>
+                                    <p>Signals contributing to the match.</p>
+                                </div>
+                            </div>
+
+                            <div id="evidence-grid" class="evidence-grid"></div>
+                        </section>
+
+                        <section class="panel">
+                            <div class="section-heading">
+                                <div>
+                                    <h2>Appearance timeline</h2>
+                                    <p>Observed movement across cameras.</p>
+                                </div>
+                            </div>
+
+                            <div id="timeline" class="timeline"></div>
+                        </section>
+                    </div>
+                </section>
+
+                <!-- HISTORY -->
+                <section id="page-history" class="page hidden">
+                    <div class="page-heading">
+                        <p class="eyebrow">Records</p>
+                        <h1>Search history</h1>
+                        <p>
+                            Open previously completed investigations without
+                            running the analysis again.
+                        </p>
+                    </div>
+
+                    <div class="panel">
+                        <div id="history-list"></div>
+                    </div>
+                </section>
+
+                <!-- PROFILE -->
+                <section id="page-profile" class="page hidden">
+                    <div class="page-heading">
+                        <p class="eyebrow">Account</p>
+                        <h1>Profile</h1>
+                        <p>Manage your account and review activity.</p>
+                    </div>
+
+                    <div class="profile-grid">
+                        <section class="panel">
+                            <h2>Account details</h2>
+
+                            <div id="profile-details"></div>
+                        </section>
+
+                        <section class="panel">
+                            <h2>Change password</h2>
+
+                            <form id="password-form">
+                                <label>
+                                    Current password
+                                    <input
+                                        id="current-password"
+                                        type="password"
+                                        required
+                                    >
+                                </label>
+
+                                <label>
+                                    New password
+                                    <input
+                                        id="new-password"
+                                        type="password"
+                                        required
+                                    >
+                                </label>
+
+                                <label>
+                                    Confirm new password
+                                    <input
+                                        id="confirm-new-password"
+                                        type="password"
+                                        required
+                                    >
+                                </label>
+
+                                <button
+                                    class="primary-button"
+                                    type="submit"
+                                >
+                                    Change password
+                                </button>
+
+                                <p id="password-message"></p>
+                            </form>
+                        </section>
+
+                        <section class="panel full-width">
+                            <h2>Recent activity</h2>
+                            <div id="audit-list"></div>
+                        </section>
+                    </div>
+                </section>
+
+            </main>
+        </section>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

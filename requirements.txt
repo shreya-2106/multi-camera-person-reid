@@ -18,3 +18,9 @@ torchreid>=0.2.5
 scipy>=1.10
 gdown>=5.0
 tensorboard>=2.14
+# Phase 15 - Web application backend
+fastapi>=0.115
+uvicorn[standard]>=0.30
+sqlalchemy>=2.0
+python-multipart>=0.0.9
+argon2-cffi>=23.1

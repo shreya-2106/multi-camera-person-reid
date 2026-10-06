@@ -47,3 +47,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Phase 15 runtime storage
+backend/storage/*.db
+backend/storage/searches/
