@@ -96,19 +96,30 @@ def _pipeline_result(payload: dict) -> dict:
 def _add_legacy_summary(search_id: int, payload: dict) -> dict:
     """Add summary/timing fields to older persisted results without changing DB data."""
     result = _pipeline_result(payload)
-    if isinstance(result.get("summary"), dict):
-        return payload
-
     videos = result.get("videos", [])
     identities = result.get("global_identities", [])
     if not isinstance(videos, list) or not isinstance(identities, list):
         return payload
 
     for video in videos:
-        if not isinstance(video, dict) or video.get("track_observations"):
+        if not isinstance(video, dict):
             continue
         camera_id = video.get("camera_id")
         if not isinstance(camera_id, str) or not _CAMERA_ID_PATTERN.fullmatch(camera_id):
+            continue
+        observations = video.get("track_observations")
+        if isinstance(observations, list) and observations:
+            if (
+                not isinstance(video.get("tracks_detected"), int)
+                or isinstance(video.get("tracks_detected"), bool)
+            ):
+                video["tracks_detected"] = len({
+                    row.get("track_id")
+                    for row in observations
+                    if isinstance(row, dict)
+                    and isinstance(row.get("track_id"), int)
+                    and not isinstance(row.get("track_id"), bool)
+                })
             continue
         tracks_csv = (
             ANALYSIS_STORAGE_DIR
@@ -122,6 +133,11 @@ def _add_legacy_summary(search_id: int, payload: dict) -> dict:
             summaries = TrackSummaryBuilder(tracks_csv).build()
         except Exception:
             continue
+        if (
+            not isinstance(video.get("tracks_detected"), int)
+            or isinstance(video.get("tracks_detected"), bool)
+        ):
+            video["tracks_detected"] = len({summary.track_id for summary in summaries})
         video["track_observations"] = [
             {
                 "camera_id": summary.camera_id,
@@ -136,6 +152,10 @@ def _add_legacy_summary(search_id: int, payload: dict) -> dict:
             for summary in summaries
         ]
 
+    # Recompute from persisted assignments and camera metrics. A legacy summary
+    # object may be present but incomplete (or contain frontend-era defaults).
+    # Detection totals intentionally remain unavailable unless the original
+    # frame-level detector count was persisted.
     result["summary"] = build_matched_person_summary(videos, identities)
     return payload
 

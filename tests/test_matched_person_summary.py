@@ -81,6 +81,21 @@ def test_candidates_and_single_camera_or_rejected_assignments_do_not_count():
     assert summary["matched_people"] == []
 
 
+def test_intermediate_candidate_acceptance_does_not_create_a_match():
+    # Candidate reports are not final assignment records. Even strong appearance
+    # evidence and valid intermediate checks cannot count without an accepted
+    # identity assignment across cameras.
+    identities = [
+        _identity(1, "CAM01", 3),
+        _identity(2, "CAM02", 8, "new_identity", score={"mean_similarity": 0.817}),
+    ]
+    summary = build_matched_person_summary(
+        [_video("CAM01", 1, []), _video("CAM02", 1, [])], identities
+    )
+    assert summary["matched_people_count"] == 0
+    assert summary["camera_observations_count"] == 0
+
+
 def test_duplicate_identity_rows_do_not_inflate_camera_observations():
     videos = [
         _video("CAM01", 2, [_observation(3, 0.0, 1.0)]),
@@ -216,3 +231,33 @@ def test_legacy_saved_result_is_enriched_from_existing_tracking_csv(tmp_path, mo
         ("CAM01", 0.0, 2.0),
         ("CAM02", 1.0, 3.0),
     ]
+
+
+def test_legacy_partial_summary_is_rebuilt_and_track_count_recovered(tmp_path, monkeypatch):
+    search_id = 932
+    analysis_root = tmp_path / "analyses"
+    camera_dir = analysis_root / f"search_{search_id}" / "outputs" / "tracking" / "CAM01"
+    camera_dir.mkdir(parents=True)
+    (camera_dir / "tracks.csv").write_text(
+        "camera_id,frame_number,timestamp_seconds,track_id,x1,y1,x2,y2\n"
+        "CAM01,0,0.0,7,0,0,20,40\n"
+        "CAM01,20,2.0,7,0,0,20,40\n"
+        "CAM01,30,3.0,8,0,0,20,40\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(searches, "ANALYSIS_STORAGE_DIR", analysis_root)
+    payload = {
+        "result": {
+            "status": "completed",
+            "videos": [{"camera_id": "CAM01", "status": "completed"}],
+            "global_identities": [],
+            "summary": {"matched_people_count": 0},
+        }
+    }
+    enriched = searches._add_legacy_summary(search_id, payload)
+    result = enriched["result"]
+    assert result["summary"]["schema_version"] == 1
+    assert result["summary"]["matched_people_count"] == 0
+    assert result["summary"]["total_tracks"] == 2
+    assert result["summary"]["total_detections"] is None
+    assert "not persisted" in result["summary"]["metric_availability"]["total_detections"]

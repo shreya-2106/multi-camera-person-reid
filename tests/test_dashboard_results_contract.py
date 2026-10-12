@@ -60,9 +60,10 @@ def test_matched_person_summary_uses_backend_counts_and_relative_track_times():
     script = (ROOT / "dashboard" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "dashboard" / "index.html").read_text(encoding="utf-8")
 
-    assert "summary.matched_people_count" in script
-    assert "summary.total_tracks" in script
-    assert "summary.total_detections" in script
+    assert "summary?.matched_people_count" in script
+    assert "summary?.total_tracks" in script
+    assert "summary?.total_detections" in script
+    assert '"Match summary unavailable"' in script
     assert "observation.first_time_seconds" in script
     assert "observation.last_time_seconds" in script
     assert "formatVideoTime" in script

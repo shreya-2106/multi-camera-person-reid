@@ -502,15 +502,10 @@ function renderSearchResult(search) {
             (identity) =>
                 identity.decision === "accept"
         );
-    const summary = result.summary || {
-        matched_people_count: 0,
-        total_tracks: null,
-        total_detections: null,
-        camera_observations_count: 0,
-        cameras_processed_count: videos.filter((video) => video.status === "completed").length,
-        matched_people: [],
-    };
-    const matchedPeople = Array.isArray(summary.matched_people)
+    const summary = result.summary && typeof result.summary === "object"
+        ? result.summary
+        : null;
+    const matchedPeople = summary && Array.isArray(summary.matched_people)
         ? summary.matched_people
         : [];
 
@@ -518,7 +513,9 @@ function renderSearchResult(search) {
     const matchBanner = $("match-banner");
 
     if (identityElement) {
-        if (matchedPeople.length) {
+        if (!summary) {
+            identityElement.textContent = "Match summary unavailable";
+        } else if (matchedPeople.length) {
             identityElement.textContent =
                 matchedPeople.map((person) => `Global Person ${person.global_person_id}`).join(", ");
         } else {
@@ -568,6 +565,9 @@ function renderSearchResult(search) {
         } else if (!completed || partial) {
             matchBanner.classList.add("result-partial");
             matchBanner.textContent = "Analysis completed with partial camera evidence. Review camera status and warnings below.";
+        } else if (!summary) {
+            matchBanner.classList.add("result-partial");
+            matchBanner.textContent = "Analysis result is available, but its match summary is missing. Reload the investigation or contact support.";
         } else if (matchedPeople.length) {
             matchBanner.classList.add("result-match");
             matchBanner.textContent = `${matchedPeople.length} unique matched ${matchedPeople.length === 1 ? "person" : "people"} across ${new Set(matchedPeople.flatMap((person) => person.camera_ids || [])).size} cameras.`;
@@ -627,12 +627,13 @@ function renderInvestigationSummary(summary) {
     metrics.replaceChildren();
     people.replaceChildren();
 
+    const availability = summary?.metric_availability || {};
     const values = [
-        ["Matched people", summary.matched_people_count ?? 0],
-        ["Total tracks", summary.total_tracks ?? "Unavailable"],
-        ["Person detections", summary.total_detections ?? "Unavailable"],
-        ["Matched camera observations", summary.camera_observations_count ?? 0],
-        ["Cameras processed", summary.cameras_processed_count ?? 0],
+        ["Matched people", summary?.matched_people_count ?? "Unavailable"],
+        ["Total tracks", summary?.total_tracks ?? "Unavailable"],
+        ["Person detections", summary?.total_detections ?? "Unavailable"],
+        ["Matched camera observations", summary?.camera_observations_count ?? "Unavailable"],
+        ["Cameras processed", summary?.cameras_processed_count ?? "Unavailable"],
     ];
     values.forEach(([label, value]) => {
         const card = document.createElement("div");
@@ -642,14 +643,26 @@ function renderInvestigationSummary(summary) {
         const caption = document.createElement("span");
         caption.textContent = label;
         card.append(number, caption);
+        const reason = availability[label === "Matched people" ? "matched_people_count"
+            : label === "Total tracks" ? "total_tracks"
+                : label === "Person detections" ? "total_detections"
+                    : label === "Matched camera observations" ? "camera_observations_count"
+                        : "cameras_processed_count"];
+        if (typeof value !== "number" && reason) {
+            const explanation = document.createElement("small");
+            explanation.textContent = reason;
+            card.appendChild(explanation);
+        }
         metrics.appendChild(card);
     });
 
-    const matchedPeople = Array.isArray(summary.matched_people) ? summary.matched_people : [];
+    const matchedPeople = Array.isArray(summary?.matched_people) ? summary.matched_people : [];
     if (!matchedPeople.length) {
         const empty = document.createElement("p");
         empty.className = "empty-state";
-        empty.textContent = "No accepted cross-camera matches found. Total tracks are listed separately above.";
+        empty.textContent = summary
+            ? "No accepted cross-camera matches found. Total tracks are listed separately above."
+            : "The investigation summary is unavailable; match counts cannot be confirmed.";
         people.appendChild(empty);
         return;
     }
@@ -882,7 +895,7 @@ function formatEvidenceValue(value) {
 
 function buildRealTimeline(summary, candidates) {
     const events = [];
-    const matchedPeople = Array.isArray(summary.matched_people) ? summary.matched_people : [];
+    const matchedPeople = Array.isArray(summary?.matched_people) ? summary.matched_people : [];
     matchedPeople.forEach((person) => {
         (person.observations || []).forEach((observation) => {
             events.push({

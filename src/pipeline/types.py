@@ -6,6 +6,9 @@ from dataclasses import asdict, dataclass
 from typing import Optional
 
 
+SUMMARY_SCHEMA_VERSION = 1
+
+
 @dataclass(frozen=True)
 class VideoInput:
     """One video supplied to the analysis pipeline."""
@@ -250,33 +253,52 @@ def build_matched_person_summary(
             "matching_evidence": evidence,
         })
 
+    track_counts_available = bool(videos) and all(
+        video.get("status") == "completed"
+        and isinstance(video.get("tracks_detected"), int)
+        and not isinstance(video.get("tracks_detected"), bool)
+        for video in videos
+    )
+    detection_counts_available = bool(videos) and all(
+        video.get("status") == "completed"
+        and isinstance(video.get("detection_count"), int)
+        and not isinstance(video.get("detection_count"), bool)
+        for video in videos
+    )
+
     return {
+        "schema_version": SUMMARY_SCHEMA_VERSION,
         "matched_people_count": len(matched_people),
         "total_tracks": (
             sum(video["tracks_detected"] for video in videos)
-            if all(
-                video.get("status") == "completed"
-                and isinstance(video.get("tracks_detected"), int)
-                and not isinstance(video.get("tracks_detected"), bool)
-                for video in videos
-            )
+            if track_counts_available
             else None
         ),
         "total_detections": (
             sum(video["detection_count"] for video in videos)
-            if all(
-                video.get("status") == "completed"
-                and isinstance(video.get("detection_count"), int)
-                and not isinstance(video.get("detection_count"), bool)
-                for video in videos
-            )
+            if detection_counts_available
             else None
         ),
         "camera_observations_count": sum(
             len(person["observations"]) for person in matched_people
         ),
         "cameras_processed_count": sum(
-            video.get("status") == "completed" for video in videos
+            video.get("status") in {"completed", "partial"} for video in videos
         ),
+        "metric_availability": {
+            "matched_people_count": None,
+            "total_tracks": (
+                None
+                if track_counts_available
+                else "Track totals were not persisted for every successfully processed camera."
+            ),
+            "total_detections": (
+                None
+                if detection_counts_available
+                else "Frame-level person detection totals were not persisted for every successfully processed camera."
+            ),
+            "camera_observations_count": None,
+            "cameras_processed_count": None,
+        },
         "matched_people": matched_people,
     }
