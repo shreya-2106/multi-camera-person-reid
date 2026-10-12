@@ -63,19 +63,47 @@ function formatDate(value) {
 }
 
 function showStatus(message, type = "info") {
-    const status = $("global-status");
+    // The authentication screen uses dedicated inline error elements rather
+    // than the shared global status element.
+    if (!$("auth-screen")?.classList.contains("hidden")) {
+        const errorId = $("login-view")?.classList.contains("hidden")
+            ? "register-error"
+            : "login-error";
+        const authError = $(errorId);
 
-    if (!status) {
+        if (authError) {
+            authError.textContent = message;
+            return;
+        }
+    }
+
+    const status = $("global-status");
+    if (status) {
+        status.textContent = message;
+        status.className = `status ${type}`;
+        show("global-status");
         return;
     }
 
-    status.textContent = message;
-    status.className = `status ${type}`;
-    show("global-status");
+    const searchError = $("search-error");
+    if (searchError && !$("page-search")?.classList.contains("hidden")) {
+        searchError.textContent = message;
+    }
 }
 
 function clearStatus() {
-    hide("global-status");
+    const status = $("global-status");
+    if (status) {
+        status.textContent = "";
+        hide("global-status");
+    }
+
+    ["login-error", "register-error", "search-error"].forEach((id) => {
+        const element = $(id);
+        if (element) {
+            element.textContent = "";
+        }
+    });
 }
 
 async function apiFetch(path, options = {}) {
@@ -128,11 +156,12 @@ function showAppScreen() {
     show("app-screen");
 }
 
-function showPage(pageId) {
+function showPage(pageName) {
     document.querySelectorAll(".page").forEach((page) => {
         page.classList.add("hidden");
     });
 
+    const pageId = `page-${pageName}`;
     const page = $(pageId);
 
     if (page) {
@@ -142,7 +171,7 @@ function showPage(pageId) {
     document.querySelectorAll("[data-page]").forEach((button) => {
         button.classList.toggle(
             "active",
-            button.dataset.page === pageId
+            button.dataset.page === pageName
         );
     });
 }
@@ -153,11 +182,12 @@ function showPage(pageId) {
 
 async function checkSession() {
     try {
-        state.user = await apiFetch("/auth/me");
+        const response = await apiFetch("/auth/me");
+        state.user = response.user;
 
         showAppScreen();
         updateUserDisplay();
-        showPage("search-page");
+        showPage("search");
 
         return true;
     } catch {
@@ -208,11 +238,12 @@ async function login(event) {
             }),
         });
 
-        state.user = await apiFetch("/auth/me");
+        const response = await apiFetch("/auth/me");
+        state.user = response.user;
 
         showAppScreen();
         updateUserDisplay();
-        showPage("search-page");
+        showPage("search");
         clearStatus();
 
         $("login-form").reset();
@@ -245,17 +276,19 @@ async function register(event) {
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                name,
-                email,
-                password,
-            }),
+    name,
+    email,
+    password,
+    confirm_password: $("register-confirm").value,
+}),
         });
 
-        state.user = await apiFetch("/auth/me");
+        const response = await apiFetch("/auth/me");
+        state.user = response.user;
 
         showAppScreen();
         updateUserDisplay();
-        showPage("search-page");
+        showPage("search");
         clearStatus();
 
         $("register-form").reset();
@@ -285,13 +318,13 @@ async function logout() {
    ============================================================ */
 
 function showLoginForm() {
-    show("login-panel");
-    hide("register-panel");
+    show("login-view");
+    hide("register-view");
 }
 
 function showRegisterForm() {
-    hide("login-panel");
-    show("register-panel");
+    hide("login-view");
+    show("register-view");
 }
 
 /* ============================================================
@@ -350,9 +383,9 @@ function renderCameraInputs() {
 }
 
 function addCamera() {
-    if (state.cameraCount >= 8) {
+    if (state.cameraCount >= 3) {
         showStatus(
-            "A maximum of 8 cameras can be uploaded.",
+            "A maximum of 3 cameras can be uploaded.",
             "error"
         );
         return;
@@ -365,6 +398,7 @@ function addCamera() {
 /* ============================================================
    Search submission
    ============================================================ */
+
 
 async function createSearch(event) {
     event.preventDefault();
@@ -402,7 +436,7 @@ async function createSearch(event) {
     }
 
     try {
-        showPage("processing-page");
+        showPage("processing");
         showStatus(
             "Uploading videos and creating search...",
             "info"
@@ -417,14 +451,14 @@ async function createSearch(event) {
 
         renderSearchResult(search);
 
-        showPage("results-page");
+        showPage("results");
 
         showStatus(
             "Search completed successfully.",
             "success"
         );
     } catch (error) {
-        showPage("search-page");
+        showPage("search");
 
         showStatus(
             error.message,
@@ -436,126 +470,454 @@ async function createSearch(event) {
 /* ============================================================
    Search results
    ============================================================ */
-
 function renderSearchResult(search) {
     state.currentSearch = search;
 
-    const result =
+    const stored =
         search.result ||
         search.result_json ||
         {};
 
-    const identity =
-        result.identity_label ||
-        "No global identity";
+    const result =
+        stored.result ||
+        stored;
 
-    const confidence =
-        result.overall_confidence;
+    const identities =
+        Array.isArray(result.global_identities)
+            ? result.global_identities
+            : [];
 
-    const identityElement =
-        $("result-identity");
+    const videos =
+        Array.isArray(result.videos)
+            ? result.videos
+            : [];
+
+    const candidates =
+        Array.isArray(result.candidate_reports)
+            ? result.candidate_reports
+            : [];
+
+    const acceptedMatches =
+        identities.filter(
+            (identity) =>
+                identity.decision === "accept"
+        );
+    const summary = result.summary || {
+        matched_people_count: 0,
+        total_tracks: null,
+        total_detections: null,
+        camera_observations_count: 0,
+        cameras_processed_count: videos.filter((video) => video.status === "completed").length,
+        matched_people: [],
+    };
+    const matchedPeople = Array.isArray(summary.matched_people)
+        ? summary.matched_people
+        : [];
+
+    const identityElement = $("identity-label");
+    const matchBanner = $("match-banner");
 
     if (identityElement) {
-        identityElement.textContent = identity;
+        if (matchedPeople.length) {
+            identityElement.textContent =
+                matchedPeople.map((person) => `Global Person ${person.global_person_id}`).join(", ");
+        } else {
+            identityElement.textContent =
+                "No cross-camera match";
+        }
     }
 
-    const confidenceElement =
-        $("result-confidence");
+    const confidenceElement = $("overall-confidence");
+    const confidenceFill = $("confidence-fill");
 
     if (confidenceElement) {
-        confidenceElement.textContent =
-            formatPercent(confidence);
+        if (acceptedMatches.length && matchedPeople.length) {
+            const score =
+                acceptedMatches[0].score;
+
+            const confidence =
+                extractIdentityScore(score);
+
+            confidenceElement.textContent =
+                confidence !== null
+                    ? formatPercent(confidence)
+                    : "—";
+        } else {
+            confidenceElement.textContent =
+                "—";
+        }
     }
 
-    const caseElement =
-        $("result-case-name");
-
-    if (caseElement) {
-        caseElement.textContent =
-            search.case_name || "Search";
+    if (confidenceFill) {
+        const score = acceptedMatches[0]
+            ? extractIdentityScore(acceptedMatches[0].score)
+            : null;
+        confidenceFill.style.width = score === null
+            ? "0%"
+            : `${Math.round(score * 100)}%`;
     }
 
-    renderCameraResults(result.cameras || []);
-    renderEvidence(result.evidence || {});
-    renderTimeline(result.timeline || []);
+    const completed = result.status === "completed";
+    const failed = search.status === "error" || Boolean(result.error);
+    const partial = videos.some((video) => video.status !== "completed");
+    if (matchBanner) {
+        matchBanner.className = "match-banner";
+        if (failed) {
+            matchBanner.classList.add("result-failed");
+            matchBanner.textContent = result.error || "Analysis failed. No complete result is available.";
+        } else if (!completed || partial) {
+            matchBanner.classList.add("result-partial");
+            matchBanner.textContent = "Analysis completed with partial camera evidence. Review camera status and warnings below.";
+        } else if (matchedPeople.length) {
+            matchBanner.classList.add("result-match");
+            matchBanner.textContent = `${matchedPeople.length} unique matched ${matchedPeople.length === 1 ? "person" : "people"} across ${new Set(matchedPeople.flatMap((person) => person.camera_ids || [])).size} cameras.`;
+        } else {
+            matchBanner.classList.add("result-no-match");
+            const rejectionCounts = {};
+            candidates.filter((candidate) => candidate.status === "rejected")
+                .forEach((candidate) => {
+                    const reason = candidate.reason || "other validation";
+                    rejectionCounts[reason] = (rejectionCounts[reason] || 0) + 1;
+                });
+            const rejectionSummary = Object.entries(rejectionCounts)
+                .map(([reason, count]) => `${count} ${reason.replaceAll("_", " ")}`)
+                .join(", ");
+            matchBanner.textContent = rejectionSummary
+                ? `No accepted cross-camera match. Candidate rejections: ${rejectionSummary}.`
+                : "No accepted cross-camera match. Available evidence did not meet the configured validation criteria.";
+        }
+    }
 
-    const flagButton = $("flag-result");
+    renderInvestigationSummary(summary);
+
+    renderCameraResults(videos, search.id);
+
+    renderEvidence(
+        acceptedMatches.length
+            ? acceptedMatches[0].evidence || {}
+            : {}
+    );
+
+    renderTimeline(buildRealTimeline(summary, candidates));
+
+    if (search.id !== undefined && search.id !== null) {
+        void loadSearchEvidence(search.id);
+    }
+
+    const flagButton =
+        $("flag-result");
+
+    const flagged =
+        Boolean(stored.flagged);
 
     if (flagButton) {
-        flagButton.disabled = Boolean(result.flagged);
-        flagButton.textContent = result.flagged
-            ? "Result Flagged"
-            : "Flag Incorrect Result";
+        flagButton.disabled = flagged;
+
+        flagButton.textContent =
+            flagged
+                ? "Result Flagged"
+                : "Flag Incorrect Result";
     }
 }
 
-function renderCameraResults(cameras) {
-    const body = $("camera-results-body");
+function renderInvestigationSummary(summary) {
+    const metrics = $("investigation-summary");
+    const people = $("matched-person-list");
+    if (!metrics || !people) return;
+    metrics.replaceChildren();
+    people.replaceChildren();
+
+    const values = [
+        ["Matched people", summary.matched_people_count ?? 0],
+        ["Total tracks", summary.total_tracks ?? "Unavailable"],
+        ["Person detections", summary.total_detections ?? "Unavailable"],
+        ["Matched camera observations", summary.camera_observations_count ?? 0],
+        ["Cameras processed", summary.cameras_processed_count ?? 0],
+    ];
+    values.forEach(([label, value]) => {
+        const card = document.createElement("div");
+        card.className = "summary-metric";
+        const number = document.createElement("strong");
+        number.textContent = typeof value === "number" ? value.toLocaleString() : String(value);
+        const caption = document.createElement("span");
+        caption.textContent = label;
+        card.append(number, caption);
+        metrics.appendChild(card);
+    });
+
+    const matchedPeople = Array.isArray(summary.matched_people) ? summary.matched_people : [];
+    if (!matchedPeople.length) {
+        const empty = document.createElement("p");
+        empty.className = "empty-state";
+        empty.textContent = "No accepted cross-camera matches found. Total tracks are listed separately above.";
+        people.appendChild(empty);
+        return;
+    }
+
+    matchedPeople.forEach((person) => {
+        const card = document.createElement("article");
+        card.className = "matched-person-card";
+        const heading = document.createElement("div");
+        heading.className = "matched-person-heading";
+        const title = document.createElement("h3");
+        title.textContent = `Global Person ${person.global_person_id}`;
+        const cameras = document.createElement("span");
+        cameras.textContent = `Matched across ${person.distinct_camera_count} cameras · ${(person.camera_ids || []).join(", ")}`;
+        heading.append(title, cameras);
+        card.appendChild(heading);
+
+        const table = document.createElement("table");
+        table.className = "observation-table";
+        const thead = document.createElement("thead");
+        const header = document.createElement("tr");
+        ["Camera", "Track", "First video time", "Last video time", "Duration", "Frames"].forEach((label) => {
+            const cell = document.createElement("th");
+            cell.scope = "col";
+            cell.textContent = label;
+            header.appendChild(cell);
+        });
+        thead.appendChild(header);
+        const tbody = document.createElement("tbody");
+        (person.observations || []).forEach((observation) => {
+            const row = document.createElement("tr");
+            const first = formatVideoTime(observation.first_time_seconds);
+            const last = formatVideoTime(observation.last_time_seconds);
+            const duration = Number.isFinite(observation.duration_seconds)
+                ? `${observation.duration_seconds.toFixed(2)} s`
+                : "Unavailable";
+            const frames = Number.isInteger(observation.first_frame) && Number.isInteger(observation.last_frame)
+                ? `${observation.first_frame}–${observation.last_frame}`
+                : "Unavailable";
+            [observation.camera_id, observation.track_id, first, last, duration, frames].forEach((value) => {
+                const cell = document.createElement("td");
+                cell.textContent = value === null || value === undefined || value === ""
+                    ? "Capture time unavailable"
+                    : String(value);
+                row.appendChild(cell);
+            });
+            tbody.appendChild(row);
+        });
+        table.append(thead, tbody);
+        card.appendChild(table);
+
+        const evidence = (person.matching_evidence || []).find((item) => item.evidence || item.score);
+        if (evidence) {
+            const evidenceText = document.createElement("p");
+            evidenceText.className = "match-evidence-caption";
+            const similarity = evidence.evidence?.mean_similarity;
+            const score = evidence.score?.total_score;
+            const available = [];
+            if (Number.isFinite(similarity)) available.push(`appearance ${formatPercent(similarity)}`);
+            if (Number.isFinite(score)) available.push(`decision score ${formatPercent(score)}`);
+            evidenceText.textContent = available.length ? `Accepted match evidence: ${available.join(" · ")}` : "Accepted match evidence is recorded.";
+            card.appendChild(evidenceText);
+        }
+        people.appendChild(card);
+    });
+}
+
+function formatVideoTime(seconds) {
+    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
+        return "Capture time unavailable";
+    }
+    const totalMilliseconds = Math.round(seconds * 1000);
+    const hours = Math.floor(totalMilliseconds / 3600000);
+    const minutes = Math.floor((totalMilliseconds % 3600000) / 60000);
+    const wholeSeconds = Math.floor((totalMilliseconds % 60000) / 1000);
+    const milliseconds = totalMilliseconds % 1000;
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(wholeSeconds).padStart(2, "0")}.${String(milliseconds).padStart(3, "0")}`;
+}
+
+
+function extractIdentityScore(score) {
+    if (!score || typeof score !== "object") {
+        return null;
+    }
+
+    const value =
+        score.total_score ??
+        score.score ??
+        score.final_score;
+
+    if (
+        typeof value !== "number" ||
+        !Number.isFinite(value)
+    ) {
+        return null;
+    }
+
+    return Math.max(
+        0,
+        Math.min(1, value)
+    );
+}
+
+
+function renderCameraResults(videos) {
+    const body = $("result-cameras");
 
     if (!body) {
         return;
     }
 
-    body.innerHTML = "";
+    body.replaceChildren();
 
-    if (!cameras.length) {
-        body.innerHTML = `
-            <tr>
-                <td colspan="3">No camera results available.</td>
-            </tr>
-        `;
+    if (!videos.length) {
+        const empty = document.createElement("p");
+        empty.className = "empty-state";
+        empty.textContent = "No camera results available.";
+        body.appendChild(empty);
         return;
     }
 
-    cameras.forEach((camera) => {
-        const row = document.createElement("tr");
-
-        row.innerHTML = `
-            <td>${escapeHtml(camera.camera)}</td>
-            <td>
-                <span class="badge success">
-                    ${escapeHtml(camera.status)}
-                </span>
-            </td>
-            <td>${formatPercent(camera.confidence)}</td>
-        `;
-
-        body.appendChild(row);
+    videos.forEach((video) => {
+        const card = document.createElement("article");
+        card.className = "camera-evidence-card";
+        const title = document.createElement("h3");
+        title.textContent = video.camera_id || "Unknown camera";
+        const status = document.createElement("span");
+        status.className = `camera-status ${video.status === "completed" ? "complete" : "incomplete"}`;
+        status.textContent = video.status || "unknown";
+        const stats = document.createElement("p");
+        stats.textContent = `${Number(video.frames_processed || 0).toLocaleString()} frames · ${Number(video.tracks_detected || 0).toLocaleString()} tracks · ${Number(video.crops_generated || 0).toLocaleString()} crops · ${Number(video.embeddings_generated || 0).toLocaleString()} embeddings`;
+        card.append(title, status, stats);
+        if (video.error) {
+            const warning = document.createElement("p");
+            warning.className = "camera-warning";
+            warning.textContent = video.error;
+            card.appendChild(warning);
+        }
+        const gallery = document.createElement("div");
+        gallery.className = "crop-gallery";
+        gallery.dataset.cameraId = video.camera_id || "";
+        card.appendChild(gallery);
+        body.appendChild(card);
     });
 }
 
+
 function renderEvidence(evidence) {
-    const appearance =
-        $("evidence-appearance");
+    const container = $("evidence-grid");
+    if (!container) return;
+    container.replaceChildren();
+    const values = [
+        ["Appearance similarity", formatEvidenceValue(evidence.mean_similarity)],
+        ["Temporal validation", evidence.temporal_valid === true ? "Valid" : evidence.temporal_valid === false ? "Rejected" : "Not available"],
+        ["Camera topology", evidence.topology_valid === true ? "Valid" : evidence.topology_valid === false ? "Rejected" : "Not available"],
+        ["Travel time", Number.isFinite(evidence.travel_time_seconds) ? `${evidence.travel_time_seconds.toFixed(1)} s` : "Not available"],
+        ["Comparisons", Number.isFinite(evidence.comparison_count) ? String(evidence.comparison_count) : "Not available"],
+    ];
+    values.forEach(([label, value]) => {
+        const item = document.createElement("div");
+        item.className = "evidence-item";
+        const name = document.createElement("span");
+        name.textContent = label;
+        const detail = document.createElement("strong");
+        detail.textContent = value;
+        item.append(name, detail);
+        container.appendChild(item);
+    });
+}
 
-    const temporal =
-        $("evidence-temporal");
 
-    const topology =
-        $("evidence-topology");
-
-    if (appearance) {
-        appearance.textContent =
-            formatPercent(evidence.appearance_similarity);
-    }
-
-    if (temporal) {
-        temporal.textContent =
-            formatPercent(evidence.temporal_consistency);
-    }
-
-    if (topology) {
-        topology.textContent =
-            evidence.topology_valid === true
-                ? "Valid"
-                : evidence.topology_valid === false
-                    ? "Invalid"
-                    : "—";
+async function loadSearchEvidence(searchId) {
+    try {
+        const response = await apiFetch(`/searches/${searchId}/evidence`);
+        if (String(state.currentSearch?.id) !== String(searchId)) return;
+        const images = Array.isArray(response.images) ? response.images : [];
+        const cameras = $("result-cameras");
+        cameras?.querySelectorAll(".crop-gallery").forEach((gallery) => {
+            const matching = images.filter((image) => image.camera_id === gallery.dataset.cameraId);
+            if (!matching.length) {
+                const empty = document.createElement("p");
+                empty.className = "empty-state";
+                empty.textContent = "No generated crop images are available for this camera.";
+                gallery.appendChild(empty);
+                return;
+            }
+            matching.forEach((image, index) => {
+                const figure = document.createElement("figure");
+                figure.className = "crop-evidence";
+                const img = document.createElement("img");
+                img.src = image.image_url;
+                img.alt = `${image.camera_id}, local track ${image.track_id}, generated person crop ${index + 1}`;
+                img.loading = "lazy";
+                img.onerror = () => {
+                    img.remove();
+                    const unavailable = document.createElement("span");
+                    unavailable.className = "image-unavailable";
+                    unavailable.textContent = "Crop image unavailable";
+                    figure.prepend(unavailable);
+                };
+                const caption = document.createElement("figcaption");
+                caption.textContent = `Track ${image.track_id} · crop ${index + 1}`;
+                figure.append(img, caption);
+                gallery.appendChild(figure);
+            });
+        });
+    } catch (error) {
+        const galleries = $("result-cameras")?.querySelectorAll(".crop-gallery");
+        galleries?.forEach((gallery) => {
+            const message = document.createElement("p");
+            message.className = "empty-state";
+            message.textContent = "Evidence images could not be loaded.";
+            gallery.appendChild(message);
+        });
+        console.warn("Unable to load search evidence images", error);
     }
 }
 
+
+function formatEvidenceValue(value) {
+    if (
+        typeof value !== "number" ||
+        !Number.isFinite(value)
+    ) {
+        return "—";
+    }
+
+    return formatPercent(value);
+}
+
+
+function buildRealTimeline(summary, candidates) {
+    const events = [];
+    const matchedPeople = Array.isArray(summary.matched_people) ? summary.matched_people : [];
+    matchedPeople.forEach((person) => {
+        (person.observations || []).forEach((observation) => {
+            events.push({
+                time: formatVideoTime(observation.first_time_seconds),
+                camera: observation.camera_id || "Unknown camera",
+                event: `Global Person ${person.global_person_id} · Track ${observation.track_id} · observed until ${formatVideoTime(observation.last_time_seconds)}`,
+            });
+        });
+    });
+    events.sort((left, right) => left.time.localeCompare(right.time));
+
+    if (!events.length) {
+        const rejectionCounts = {};
+        (Array.isArray(candidates) ? candidates : [])
+            .filter((candidate) => candidate.status === "rejected")
+            .forEach((candidate) => {
+                const reason = candidate.reason || "other validation";
+                rejectionCounts[reason] = (rejectionCounts[reason] || 0) + 1;
+            });
+        Object.entries(rejectionCounts).forEach(([reason, count]) => {
+            events.push({
+                time: "",
+                camera: "Candidate review",
+                event: `${count} candidates rejected: ${reason.replaceAll("_", " ")}`,
+            });
+        });
+        if (!events.length) events.push({ time: "", camera: "Timeline", event: "No accepted cross-camera observations are available." });
+    }
+
+    return events;
+}
+
+
 function renderTimeline(events) {
-    const container = $("result-timeline");
+    const container = $("timeline");
 
     if (!container) {
         return;
@@ -566,6 +928,7 @@ function renderTimeline(events) {
     if (!events.length) {
         container.innerHTML =
             `<div class="empty">No timeline events.</div>`;
+
         return;
     }
 
@@ -573,7 +936,8 @@ function renderTimeline(events) {
         const item =
             document.createElement("div");
 
-        item.className = "timeline-item";
+        item.className =
+            "timeline-item";
 
         item.innerHTML = `
             <time>
@@ -611,8 +975,11 @@ function renderTimeline(events) {
 
 async function loadHistory() {
     try {
-        const searches =
+        const response =
             await apiFetch("/searches");
+        const searches = Array.isArray(response)
+            ? response
+            : response.searches || [];
 
         const container =
             $("history-list");
@@ -729,7 +1096,7 @@ async function openSearch(searchId) {
             );
 
         renderSearchResult(search);
-        showPage("results-page");
+        showPage("results");
 
         clearStatus();
     } catch (error) {
@@ -884,44 +1251,22 @@ async function loadProfile() {
         const profile =
             await apiFetch("/profile");
 
-        const name =
-            $("profile-name");
+        const details = $("profile-details");
+        if (details) {
+            const fields = [
+                ["Name", profile.name],
+                ["Email", profile.email],
+                ["Role", profile.role],
+                ["Created", formatDate(profile.created_at)],
+                ["Last login", formatDate(profile.last_login_at)],
+            ];
 
-        const email =
-            $("profile-email");
-
-        const role =
-            $("profile-role");
-
-        const created =
-            $("profile-created");
-
-        const lastLogin =
-            $("profile-last-login");
-
-        if (name) {
-            name.textContent =
-                profile.name || "—";
-        }
-
-        if (email) {
-            email.textContent =
-                profile.email || "—";
-        }
-
-        if (role) {
-            role.textContent =
-                profile.role || "—";
-        }
-
-        if (created) {
-            created.textContent =
-                formatDate(profile.created_at);
-        }
-
-        if (lastLogin) {
-            lastLogin.textContent =
-                formatDate(profile.last_login_at);
+            details.innerHTML = fields.map(([label, value]) => `
+                <div class="profile-detail">
+                    <span>${escapeHtml(label)}</span>
+                    <strong>${escapeHtml(value || "—")}</strong>
+                </div>
+            `).join("");
         }
     } catch (error) {
         showStatus(
@@ -941,7 +1286,7 @@ async function changePassword(event) {
         $("new-password").value;
 
     const confirmPassword =
-        $("confirm-password").value;
+        $("confirm-new-password").value;
 
     try {
         await apiFetch(
@@ -985,11 +1330,13 @@ async function changePassword(event) {
 
 async function loadAuditLog() {
     try {
-        const entries =
+        const response =
             await apiFetch("/audit-log");
+        const entries = Array.isArray(response)
+            ? response
+            : response.entries || [];
 
-        const body =
-            $("audit-log-body");
+        const body = $("audit-list");
 
         if (!body) {
             return;
@@ -998,43 +1345,19 @@ async function loadAuditLog() {
         body.innerHTML = "";
 
         if (!entries.length) {
-            body.innerHTML = `
-                <tr>
-                    <td colspan="3">
-                        No audit entries available.
-                    </td>
-                </tr>
-            `;
+            body.innerHTML = `<div class="empty">No audit entries available.</div>`;
             return;
         }
 
         entries.forEach((entry) => {
-            const row =
-                document.createElement("tr");
-
-            row.innerHTML = `
-                <td>
-                    ${escapeHtml(
-                        formatDate(
-                            entry.created_at
-                        )
-                    )}
-                </td>
-
-                <td>
-                    ${escapeHtml(
-                        entry.action
-                    )}
-                </td>
-
-                <td>
-                    ${escapeHtml(
-                        entry.detail
-                    )}
-                </td>
+            const item = document.createElement("div");
+            item.className = "profile-detail";
+            item.innerHTML = `
+                <span>${escapeHtml(formatDate(entry.created_at))}</span>
+                <strong>${escapeHtml(entry.action)}</strong>
+                <span>${escapeHtml(entry.detail || "")}</span>
             `;
-
-            body.appendChild(row);
+            body.appendChild(item);
         });
     } catch (error) {
         showStatus(
@@ -1160,17 +1483,11 @@ function bindEvents() {
 
                     showPage(page);
 
-                    if (
-                        page ===
-                        "history-page"
-                    ) {
+                    if (page === "history") {
                         await loadHistory();
                     }
 
-                    if (
-                        page ===
-                        "profile-page"
-                    ) {
+                    if (page === "profile") {
                         await loadProfile();
                         await loadAuditLog();
                     }

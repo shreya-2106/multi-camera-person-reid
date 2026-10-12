@@ -69,6 +69,7 @@ def test_track_video_respects_limit_writes_csv_and_annotation(tmp_path):
         annotate=True, annotated_output_path=annotated, max_frames=2)
     assert result.status == STATUS_OK
     assert result.frames_processed == 2
+    assert result.detection_count == 2
     assert result.output_csv_path == str(csv_path) and csv_path.exists()
     assert result.annotated_video_path == str(annotated) and annotated.exists()
 

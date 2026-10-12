@@ -31,6 +31,8 @@ detection:
   confidence: 0.5
   iou: 0.45
   imgsz: 640
+  # Process a small frame batch per YOLO call; ByteTrack still updates every frame.
+  inference_batch_size: 8
   device: "auto"
   classes:
     - "person"

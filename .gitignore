@@ -51,3 +51,6 @@ Thumbs.db
 # Phase 15 runtime storage
 backend/storage/*.db
 backend/storage/searches/
+
+# Per-search pipeline outputs contain generated person crops and evidence.
+backend/storage/analyses/

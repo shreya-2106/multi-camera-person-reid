@@ -55,6 +55,7 @@ class TrackingVideoResult:
     output_csv_path: Optional[str] = None
     annotated_video_path: Optional[str] = None
     error: Optional[str] = None
+    detection_count: int = 0
 
 
 def write_tracks_csv(tracks: list[TrackedPerson], output_path: Path) -> Path:

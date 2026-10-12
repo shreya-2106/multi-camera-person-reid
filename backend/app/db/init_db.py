@@ -1,10 +1,10 @@
-from backend.app.db.database import Base, engine
+from backend.app.db.database import Base, get_engine
 from backend.app.db import models  # noqa: F401
 
 
 def init_db() -> None:
     """Create all application database tables."""
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=get_engine())
 
 
 if __name__ == "__main__":

@@ -159,6 +159,13 @@
 
             <main class="content">
 
+                <div
+                    id="global-status"
+                    class="status hidden"
+                    role="status"
+                    aria-live="polite"
+                ></div>
+
                 <!-- SEARCH -->
                 <section id="page-search" class="page">
                     <div class="page-heading">
@@ -257,6 +264,17 @@
                     </div>
 
                     <div id="match-banner" class="match-banner"></div>
+
+                    <section class="panel full-width matched-summary-panel">
+                        <div class="section-heading">
+                            <div>
+                                <h2>Investigation summary</h2>
+                                <p>Matched people are unique accepted identities across cameras. Times are elapsed within each video; this analysis does not contain absolute camera clock metadata.</p>
+                            </div>
+                        </div>
+                        <div id="investigation-summary" class="summary-metrics"></div>
+                        <div id="matched-person-list" class="matched-person-list"></div>
+                    </section>
 
                     <div class="result-grid">
                         <section class="panel identity-panel">
@@ -394,6 +412,6 @@
         </section>
     </div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=2"></script>
 </body>
 </html>

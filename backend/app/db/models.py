@@ -4,9 +4,13 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.mysql import DATETIME as MySQLDateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.db.database import Base
+
+
+TIMESTAMP = DateTime(timezone=True).with_variant(MySQLDateTime(fsp=6), "mysql")
 
 
 def utc_now() -> datetime:
@@ -22,9 +26,9 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     role: Mapped[str] = mapped_column(String(50), nullable=False, default="user")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=utc_now, nullable=False)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True),
+        TIMESTAMP,
         nullable=True,
     )
 
@@ -52,8 +56,8 @@ class Session(Base):
         index=True,
     )
     token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=utc_now, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
 
     user: Mapped["User"] = relationship(back_populates="sessions")
 
@@ -68,7 +72,7 @@ class Search(Base):
         index=True,
     )
     case_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=utc_now, nullable=False)
     camera_count: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False)
 
@@ -108,6 +112,6 @@ class AuditLog(Base):
     )
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=utc_now, nullable=False)
 
     user: Mapped["User"] = relationship(back_populates="audit_entries")

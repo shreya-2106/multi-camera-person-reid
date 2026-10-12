@@ -108,6 +108,7 @@ class Detector:
         device: str = DEFAULT_DEVICE,
         imgsz: int = DEFAULT_IMGSZ,
         classes: Sequence[str] = DEFAULT_CLASSES,
+        inference_batch_size: int = 8,
     ):
         self.model_name_or_path = model
         self.confidence = confidence
@@ -115,6 +116,13 @@ class Detector:
         self.imgsz = imgsz
         self.device = resolve_device(device)
         self.class_names_filter = tuple(classes)
+        if (
+            not isinstance(inference_batch_size, int)
+            or isinstance(inference_batch_size, bool)
+            or inference_batch_size < 1
+        ):
+            raise ValueError("inference_batch_size must be a positive integer")
+        self.inference_batch_size = inference_batch_size
 
         self._model: Any = None
         self._class_id_filter: Optional[List[int]] = None
@@ -131,6 +139,7 @@ class Detector:
             device=det_cfg.get("device", DEFAULT_DEVICE),
             imgsz=det_cfg.get("imgsz", DEFAULT_IMGSZ),
             classes=det_cfg.get("classes", list(DEFAULT_CLASSES)),
+            inference_batch_size=det_cfg.get("inference_batch_size", 8),
         )
 
     # -- model loading -----------------------------------------------------
@@ -170,6 +179,7 @@ class Detector:
             return
 
         logger.info("Loading YOLO model '%s' on device '%s'", self.model_name_or_path, self.device)
+        model_load_started = time.perf_counter()
         resolved_path = resolve_model_path(self.model_name_or_path)
         Path(resolved_path).parent.mkdir(parents=True, exist_ok=True)
         model = self._create_backend_model(resolved_path)
@@ -190,7 +200,8 @@ class Detector:
         self._class_id_filter = sorted(class_ids)
         self._model = model
         logger.info(
-            "Model loaded. Filtering to class id(s) %s (%s)",
+            "Model loaded in %.3f seconds. Filtering to class id(s) %s (%s)",
+            time.perf_counter() - model_load_started,
             self._class_id_filter,
             ", ".join(self.class_names_filter),
         )
@@ -234,6 +245,44 @@ class Detector:
             verbose=False,
         )
         return self._parse_results(results, camera_id, frame_number, timestamp_seconds)
+
+    def detect_frames(
+        self,
+        frames: Sequence[Any],
+        camera_id: Optional[str],
+        frame_numbers: Sequence[int],
+        timestamps_seconds: Sequence[Optional[float]],
+    ) -> List[List[Detection]]:
+        """Detect a bounded frame batch while retaining per-frame results."""
+        if not frames:
+            return []
+        if not (
+            len(frames) == len(frame_numbers) == len(timestamps_seconds)
+        ):
+            raise ValueError("frames, frame_numbers, and timestamps must have equal lengths")
+
+        self.load_model()
+        results = self._model.predict(
+            source=list(frames),
+            batch=len(frames),
+            conf=self.confidence,
+            iou=self.iou,
+            imgsz=self.imgsz,
+            device=self.device,
+            classes=self._class_id_filter,
+            verbose=False,
+        )
+        parsed = [
+            self._parse_results([result], camera_id, frame_number, timestamp)
+            for result, frame_number, timestamp in zip(
+                results, frame_numbers, timestamps_seconds
+            )
+        ]
+        if len(parsed) != len(frames):
+            raise DetectorError(
+                f"YOLO returned {len(parsed)} results for {len(frames)} frames"
+            )
+        return parsed
 
     def _parse_results(
         self,

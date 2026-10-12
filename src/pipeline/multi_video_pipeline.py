@@ -16,6 +16,9 @@ Phase 13:
 
 from __future__ import annotations
 
+import logging
+import math
+import time
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +41,8 @@ from src.temporal.topology import CameraTopology
 from src.temporal.track_summary import TrackSummaryBuilder
 from src.tracking.tracker import Tracker
 
+logger = logging.getLogger(__name__)
+
 
 class MultiVideoPipelineError(RuntimeError):
     """Raised when multi-video analysis cannot be completed."""
@@ -56,6 +61,8 @@ class MultiVideoPipeline:
 
         self.config = self._load_yaml(self.config_path)
         self.reid_config = self._load_yaml(self.reid_config_path)
+        self._detector: Detector | None = None
+        self._embedder: ReIDEmbedder | None = None
 
     # ------------------------------------------------------------------
     # Configuration
@@ -263,7 +270,9 @@ class MultiVideoPipeline:
             # Initialize detector
             # ----------------------------------------------------------
 
-            detector = Detector.from_config(self.config)
+            if self._detector is None:
+                self._detector = Detector.from_config(self.config)
+            detector = self._detector
 
             # ----------------------------------------------------------
             # Initialize tracker
@@ -335,6 +344,7 @@ class MultiVideoPipeline:
             # Run detection + tracking
             # ----------------------------------------------------------
 
+            tracking_started = time.perf_counter()
             tracking_result = tracker.track_video(
                 video_path=video_path,
                 detector=detector,
@@ -343,6 +353,7 @@ class MultiVideoPipeline:
                 annotate=False,
                 max_frames=None,
             )
+            tracking_seconds = time.perf_counter() - tracking_started
 
             tracks = getattr(
                 tracking_result,
@@ -357,6 +368,9 @@ class MultiVideoPipeline:
                     0,
                 )
             )
+            detection_count = int(
+                getattr(tracking_result, "detection_count", 0)
+            )
 
             unique_track_ids = {
                 int(getattr(track, "track_id"))
@@ -368,6 +382,7 @@ class MultiVideoPipeline:
             # Extract person crops
             # ----------------------------------------------------------
 
+            crop_started = time.perf_counter()
             crops_generated = self._extract_crops_from_tracks(
                 video=video,
                 tracks=tracks,
@@ -377,17 +392,21 @@ class MultiVideoPipeline:
             self._filter_reid_quality_tracks(
                 camera_crop_dir
             )
+            crop_seconds = time.perf_counter() - crop_started
 
             # ----------------------------------------------------------
             # Generate OSNet embeddings
             # ----------------------------------------------------------
 
             embeddings_generated = 0
+            embedding_seconds = 0.0
 
             if camera_crop_dir.exists():
-                embedder = ReIDEmbedder.from_config(
-                    self.reid_config
-                )
+                if self._embedder is None:
+                    self._embedder = ReIDEmbedder.from_config(
+                        self.reid_config
+                    )
+                embedder = self._embedder
 
                 embedding_output_root = Path(
                     str(
@@ -412,16 +431,32 @@ class MultiVideoPipeline:
                     camera_embedding_dir
                 )
 
+                embedding_started = time.perf_counter()
                 embedder.extract_directory(
                     camera_crop_dir,
                     embedding_output_root,
                 )
+                embedding_seconds = time.perf_counter() - embedding_started
 
                 embeddings_generated = (
                     self._count_embedding_files(
                         camera_embedding_dir
                     )
                 )
+
+            logger.info(
+                "analysis_camera_timing camera=%s tracking_seconds=%.3f "
+                "crop_seconds=%.3f embedding_seconds=%.3f frames=%d "
+                "tracks=%d crops=%d embeddings=%d",
+                video.camera_id,
+                tracking_seconds,
+                crop_seconds,
+                embedding_seconds,
+                frames_processed,
+                len(unique_track_ids),
+                crops_generated,
+                embeddings_generated,
+            )
 
             return VideoAnalysisResult(
                 camera_id=video.camera_id,
@@ -435,6 +470,9 @@ class MultiVideoPipeline:
                     camera_crop_dir.resolve()
                 ),
                 error=None,
+                detection_count=detection_count,
+                fps=getattr(tracking_result, "fps", None),
+                track_observations=self._summarize_track_observations(tracks),
             )
 
         except Exception as exc:
@@ -451,10 +489,62 @@ class MultiVideoPipeline:
             )
 
         finally:
-            self._safe_close(embedder)
             self._safe_close(crop_extractor)
             self._safe_close(tracker)
-            self._safe_close(detector)
+
+    @staticmethod
+    def _summarize_track_observations(tracks: Any) -> tuple[dict, ...]:
+        """Summarize tracked frame records without inferring absolute capture time."""
+        grouped: dict[tuple[str, int], list[Any]] = {}
+        for track in tracks or ():
+            camera_id = getattr(track, "camera_id", None)
+            track_id = getattr(track, "track_id", None)
+            frame = getattr(track, "frame_number", None)
+            if (
+                not isinstance(camera_id, str) or not camera_id
+                or not isinstance(track_id, int) or track_id < 0
+                or not isinstance(frame, int) or frame < 0
+            ):
+                continue
+            grouped.setdefault((camera_id, track_id), []).append(track)
+
+        summaries = []
+        for (camera_id, track_id), records in sorted(grouped.items()):
+            records.sort(key=lambda item: item.frame_number)
+            first_frame = records[0].frame_number
+            last_frame = records[-1].frame_number
+            times = [getattr(record, "timestamp_seconds", None) for record in records]
+            valid_times = all(
+                isinstance(value, (int, float))
+                and math.isfinite(float(value))
+                and float(value) >= 0
+                for value in times
+            )
+            monotonic = valid_times and all(
+                float(right) >= float(left)
+                for left, right in zip(times, times[1:])
+            )
+            first_time = float(times[0]) if monotonic else None
+            last_time = float(times[-1]) if monotonic else None
+            summaries.append({
+                "camera_id": camera_id,
+                "track_id": track_id,
+                "first_frame": first_frame,
+                "last_frame": last_frame,
+                "first_time_seconds": first_time,
+                "last_time_seconds": last_time,
+                "duration_seconds": (
+                    last_time - first_time
+                    if first_time is not None and last_time is not None
+                    else None
+                ),
+                "timestamp_basis": (
+                    "video_relative_seconds_from_frame_index_and_fps"
+                    if monotonic
+                    else "unavailable"
+                ),
+            })
+        return tuple(summaries)
 
     # ------------------------------------------------------------------
     # Crop helpers
@@ -1093,9 +1183,16 @@ class MultiVideoPipeline:
     ) -> MultiVideoAnalysisResult:
         """Run the complete multi-video analysis pipeline."""
 
+        run_started = time.perf_counter()
         try:
+            validation_started = time.perf_counter()
             validated_inputs = self.validate_inputs(
                 video_inputs
+            )
+            logger.info(
+                "analysis_stage_timing stage=validation seconds=%.3f videos=%d",
+                time.perf_counter() - validation_started,
+                len(validated_inputs),
             )
 
             results: list[
@@ -1130,11 +1227,19 @@ class MultiVideoPipeline:
             # Phase 13
             # ----------------------------------------------------------
 
+            matching_started = time.perf_counter()
             global_identities, candidate_reports = (
                 self._run_cross_camera_matching(
                     videos=validated_inputs,
                     video_results=video_results,
                 )
+            )
+            logger.info(
+                "analysis_stage_timing stage=matching seconds=%.3f "
+                "global_identity_records=%d candidate_reports=%d",
+                time.perf_counter() - matching_started,
+                len(global_identities),
+                len(candidate_reports),
             )
 
             unique_global_people = len(
@@ -1170,6 +1275,16 @@ class MultiVideoPipeline:
                 global_identities=(),
                 error=str(exc),
             )
+
+        finally:
+            logger.info(
+                "analysis_stage_timing stage=pipeline_total seconds=%.3f",
+                time.perf_counter() - run_started,
+            )
+            self._safe_close(self._embedder)
+            self._safe_close(self._detector)
+            self._embedder = None
+            self._detector = None
 
     # ------------------------------------------------------------------
     # Filesystem helpers

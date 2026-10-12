@@ -13,6 +13,7 @@ import csv
 import logging
 import re
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -366,11 +367,16 @@ class ReIDEmbedder:
 
         logger.info("Loading OSNet Re-ID model...")
         logger.info("Device: %s", self.device)
+        model_load_started = time.perf_counter()
 
         self._model = (
             self._create_backend_model()
             .to(torch.device(self.device))
             .eval()
+        )
+        logger.info(
+            "OSNet model loaded in %.3f seconds",
+            time.perf_counter() - model_load_started,
         )
 
     def _preprocess(self, image: np.ndarray) -> Any:

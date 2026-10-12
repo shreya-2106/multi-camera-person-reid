@@ -121,13 +121,13 @@ class TransitionCandidateBuilder:
             entry_time=to_track.start_time,
             travel_time_seconds=travel_time,
         )
-        def explain_pair(
+
+    def explain_pair(
         self,
         from_track: TrackSummary,
         to_track: TrackSummary,
-           ) -> dict:
-    
-         """Explain why a cross-camera transition pair is valid or rejected."""
+    ) -> dict:
+        """Explain why a cross-camera transition pair is valid or rejected."""
 
         if from_track.camera_id == to_track.camera_id:
             return {

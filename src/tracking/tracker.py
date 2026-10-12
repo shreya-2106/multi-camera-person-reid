@@ -135,18 +135,59 @@ class Tracker:
             annotated_output_path.parent.mkdir(parents=True, exist_ok=True)
             writer = cv2.VideoWriter(str(annotated_output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps or 25.0, (width, height))
         result = TrackingVideoResult(str(video_path), camera_id, STATUS_OK, fps=fps, width=width, height=height)
-        frame_number, started = 0, time.monotonic()
+        frame_number, processed_frames = 0, 0
+        started = time.perf_counter()
+        decode_seconds = detection_seconds = tracking_seconds = 0.0
+        detection_count = 0
+        batch_size = max(1, int(getattr(detector, "inference_batch_size", 1)))
         try:
             while max_frames is None or frame_number < max_frames:
-                ok, frame = cap.read()
-                if not ok or frame is None:
+                frames, frame_numbers = [], []
+                decode_started = time.perf_counter()
+                while len(frames) < batch_size and (
+                    max_frames is None or frame_number < max_frames
+                ):
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        break
+                    frames.append(frame)
+                    frame_numbers.append(frame_number)
+                    frame_number += 1
+                decode_seconds += time.perf_counter() - decode_started
+
+                if not frames:
                     break
-                detections = detector.detect_frame(frame, camera_id, frame_number, frame_number / fps if fps else None)
-                tracks = self.update(detections)
-                result.tracks.extend(tracks)
-                if writer is not None:
-                    writer.write(draw_tracks(frame, tracks))
-                frame_number += 1
+
+                timestamps = [number / fps if fps else None for number in frame_numbers]
+                detect_batch = getattr(detector, "detect_frames", None)
+                detection_started = time.perf_counter()
+                if batch_size > 1 and callable(detect_batch):
+                    detections_by_frame = detect_batch(
+                        frames, camera_id, frame_numbers, timestamps
+                    )
+                else:
+                    detections_by_frame = [
+                        detector.detect_frame(frame, camera_id, number, timestamp)
+                        for frame, number, timestamp in zip(
+                            frames, frame_numbers, timestamps
+                        )
+                    ]
+                detection_seconds += time.perf_counter() - detection_started
+
+                if len(detections_by_frame) != len(frames):
+                    raise TrackingError(
+                        "detector returned a different number of frame results"
+                    )
+
+                for frame, detections in zip(frames, detections_by_frame):
+                    detection_count += len(detections)
+                    tracking_started = time.perf_counter()
+                    tracks = self.update(detections)
+                    tracking_seconds += time.perf_counter() - tracking_started
+                    result.tracks.extend(tracks)
+                    if writer is not None:
+                        writer.write(draw_tracks(frame, tracks))
+                    processed_frames += 1
         except Exception as exc:
             logger.exception("Tracking failed at frame %s", frame_number)
             result.status, result.error = STATUS_ERROR, str(exc)
@@ -154,12 +195,27 @@ class Tracker:
             cap.release()
             if writer is not None:
                 writer.release()
-        result.frames_processed, result.track_count = frame_number, len(result.tracks)
+        result.frames_processed, result.track_count = processed_frames, len(result.tracks)
+        result.detection_count = detection_count
         if output_csv is not None and result.status != STATUS_ERROR:
             result.output_csv_path = str(write_tracks_csv(result.tracks, Path(output_csv)))
         if writer is not None and result.status != STATUS_ERROR:
             result.annotated_video_path = str(annotated_output_path)
-        logger.info("Tracked %s: %d frames, %d active track records in %.1fs", video_path.name, frame_number, result.track_count, time.monotonic() - started)
+        total_seconds = time.perf_counter() - started
+        logger.info(
+            "video_stage_timing camera=%s frames=%d detections=%d "
+            "decode_seconds=%.3f yolo_seconds=%.3f bytetrack_seconds=%.3f "
+            "total_seconds=%.3f tracks=%d",
+            camera_id,
+            processed_frames,
+            detection_count,
+            decode_seconds,
+            detection_seconds,
+            tracking_seconds,
+            total_seconds,
+            result.track_count,
+        )
+        logger.info("Tracked %s: %d frames, %d active track records in %.1fs", video_path.name, processed_frames, result.track_count, total_seconds)
         return result
 
 

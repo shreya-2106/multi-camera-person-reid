@@ -137,10 +137,11 @@ class AuthenticationService:
         expires_at = session.expires_at
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
-            if expires_at <= now:
-                self.db.delete(session)
-                self.db.commit()
-                return None
+
+        if expires_at <= now:
+            self.db.delete(session)
+            self.db.commit()
+            return None
 
         return session.user
 

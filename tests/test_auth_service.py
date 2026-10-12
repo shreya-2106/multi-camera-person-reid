@@ -163,3 +163,34 @@ def test_expired_session_is_rejected(db):
     db.commit()
 
     assert service.get_user_from_token(token) is None
+
+
+def test_timezone_aware_expired_session_is_rejected():
+    expired_record = type(
+        "SessionRecord",
+        (),
+        {
+            "expires_at": datetime.now(timezone.utc) - timedelta(minutes=1),
+            "user": None,
+        },
+    )()
+
+    class SessionStore:
+        deleted = None
+        committed = False
+
+        def scalar(self, _statement):
+            return expired_record
+
+        def delete(self, record):
+            self.deleted = record
+
+        def commit(self):
+            self.committed = True
+
+    db = SessionStore()
+    service = AuthenticationService(db)
+
+    assert service.get_user_from_token("test-session-token") is None
+    assert db.deleted is expired_record
+    assert db.committed
