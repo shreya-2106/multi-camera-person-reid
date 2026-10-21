@@ -132,11 +132,15 @@ class CrossCameraMatcher:
         self,
         from_track: TrackSummary,
         to_track: TrackSummary,
+        from_offset_seconds: float = 0.0,
+        to_offset_seconds: float = 0.0,
     ) -> TransitionCandidate | None:
         """Build a valid topology/time transition candidate."""
         return self.transition_builder.build_pair(
             from_track,
             to_track,
+            from_offset_seconds,
+            to_offset_seconds,
         )
 
     def build_candidate(
@@ -145,11 +149,15 @@ class CrossCameraMatcher:
         to_track: TrackSummary,
         similarity: TrackSimilarityResult,
         target_global_person_id: int,
+        from_offset_seconds: float = 0.0,
+        to_offset_seconds: float = 0.0,
     ) -> tuple[IdentityCandidate, CandidateScore] | None:
         """Build an identity candidate and score it."""
         transition = self.build_transition(
             from_track,
             to_track,
+            from_offset_seconds,
+            to_offset_seconds,
         )
 
         if transition is None:
@@ -202,6 +210,9 @@ class CrossCameraMatcher:
         from_embeddings_path: str | Path,
         to_embeddings_path: str | Path,
         target_global_person_id: int,
+        from_offset_seconds: float = 0.0,
+        to_offset_seconds: float = 0.0,
+        similarity: TrackSimilarityResult | None = None,
     ) -> CrossCameraMatchResult | None:
         """Evaluate one complete cross-camera track pair."""
         if from_track.camera_id == to_track.camera_id:
@@ -209,16 +220,19 @@ class CrossCameraMatcher:
                 "Cross-camera matching requires different cameras"
             )
 
-        similarity = self.compare_embedding_files(
-            from_embeddings_path,
-            to_embeddings_path,
-        )
+        if similarity is None:
+            similarity = self.compare_embedding_files(
+                from_embeddings_path,
+                to_embeddings_path,
+            )
 
         built = self.build_candidate(
             from_track=from_track,
             to_track=to_track,
             similarity=similarity,
             target_global_person_id=target_global_person_id,
+            from_offset_seconds=from_offset_seconds,
+            to_offset_seconds=to_offset_seconds,
         )
 
         if built is None:
@@ -229,6 +243,8 @@ class CrossCameraMatcher:
         transition = self.build_transition(
             from_track,
             to_track,
+            from_offset_seconds,
+            to_offset_seconds,
         )
 
         if transition is None:
@@ -254,6 +270,13 @@ class CrossCameraMatcher:
             transition=transition,
             evidence=evidence,
             score=score,
+            timing_basis="video_relative_plus_configured_offsets",
+            timeline_offsets_seconds={
+                from_track.camera_id: from_offset_seconds,
+                to_track.camera_id: to_offset_seconds,
+            },
+            timeline_offset_source="user_provided",
+            common_time_origin=True,
         )
 
         return CrossCameraMatchResult(

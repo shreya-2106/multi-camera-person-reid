@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import re
 import shutil
 import time
@@ -238,6 +239,7 @@ async def _save_upload(
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_search(
     case_name: str = Form("Untitled search"),
+    camera_time_offsets_seconds: str | None = Form(None),
     videos: list[UploadFile] = File(...),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -261,6 +263,26 @@ async def create_search(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Real multi-camera analysis supports a maximum of 3 cameras.",
         )
+
+    offsets: dict[str, float] = {}
+    if camera_time_offsets_seconds:
+        try:
+            raw_offsets = json.loads(camera_time_offsets_seconds)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(400, "Camera time offsets must be valid JSON.") from exc
+        if not isinstance(raw_offsets, dict):
+            raise HTTPException(400, "Camera time offsets must be an object keyed by camera ID.")
+        allowed_camera_ids = {f"CAM{index:02d}" for index in range(1, len(videos) + 1)}
+        for camera_id, raw_value in raw_offsets.items():
+            if camera_id not in allowed_camera_ids:
+                raise HTTPException(400, "Camera time offset references an unknown camera.")
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(400, "Camera time offsets must be finite numbers.") from exc
+            if isinstance(raw_value, bool) or not math.isfinite(value):
+                raise HTTPException(400, "Camera time offsets must be finite numbers.")
+            offsets[camera_id] = value
 
     cleaned_case_name = case_name.strip()
 
@@ -322,6 +344,7 @@ async def create_search(
             video_paths=video_paths,
             camera_ids=camera_names,
             analysis_id=search.id,
+            camera_time_offsets_seconds=offsets,
         )
 
         result = analysis_result.to_dict()

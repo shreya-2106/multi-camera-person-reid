@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import math
 from typing import Optional
 
 
@@ -15,6 +16,7 @@ class VideoInput:
 
     video_path: str
     camera_id: str
+    timeline_offset_seconds: Optional[float] = None
 
     def __post_init__(self) -> None:
         if not self.video_path:
@@ -22,6 +24,12 @@ class VideoInput:
 
         if not self.camera_id:
             raise ValueError("camera_id must be non-empty")
+        if self.timeline_offset_seconds is not None and (
+            isinstance(self.timeline_offset_seconds, bool)
+            or not isinstance(self.timeline_offset_seconds, (int, float))
+            or not math.isfinite(self.timeline_offset_seconds)
+        ):
+            raise ValueError("timeline_offset_seconds must be a finite number or None")
 
     def to_dict(self) -> dict:
         """Convert the video input to a dictionary."""
@@ -46,6 +54,8 @@ class VideoAnalysisResult:
     detection_count: int = 0
     fps: Optional[float] = None
     track_observations: tuple[dict, ...] = ()
+    timeline_offset_seconds: Optional[float] = None
+    timeline_offset_source: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.camera_id:

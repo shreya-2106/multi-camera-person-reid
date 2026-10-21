@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from .topology import CameraTopology
 from .types import TrackSummary
@@ -47,15 +48,8 @@ class TransitionCandidate:
                 "to_track_id must be non-negative"
             )
 
-        if self.exit_time < 0.0:
-            raise ValueError(
-                "exit_time must be non-negative"
-            )
-
-        if self.entry_time < 0.0:
-            raise ValueError(
-                "entry_time must be non-negative"
-            )
+        if not math.isfinite(self.exit_time) or not math.isfinite(self.entry_time):
+            raise ValueError("transition times must be finite")
 
         if self.travel_time_seconds < 0.0:
             raise ValueError(
@@ -88,8 +82,18 @@ class TransitionCandidateBuilder:
         self,
         from_track: TrackSummary,
         to_track: TrackSummary,
+        from_offset_seconds: float = 0.0,
+        to_offset_seconds: float = 0.0,
     ) -> TransitionCandidate | None:
-        """Check whether two tracks form a valid transition."""
+        """Check a transition after adding each clip's timeline offset.
+
+        The offset is added to video-relative seconds to place observations on
+        a shared timeline. Callers must supply a known offset, not an estimate
+        inferred from appearance similarity.
+        """
+
+        if not math.isfinite(from_offset_seconds) or not math.isfinite(to_offset_seconds):
+            raise ValueError("timeline offsets must be finite")
 
         if from_track.camera_id == to_track.camera_id:
             return None
@@ -101,8 +105,8 @@ class TransitionCandidateBuilder:
             return None
 
         travel_time = (
-            to_track.start_time
-            - from_track.end_time
+            (to_track.start_time + to_offset_seconds)
+            - (from_track.end_time + from_offset_seconds)
         )
 
         if not self.topology.is_travel_time_valid(
@@ -117,8 +121,8 @@ class TransitionCandidateBuilder:
             from_track_id=from_track.track_id,
             to_camera=to_track.camera_id,
             to_track_id=to_track.track_id,
-            exit_time=from_track.end_time,
-            entry_time=to_track.start_time,
+            exit_time=from_track.end_time + from_offset_seconds,
+            entry_time=to_track.start_time + to_offset_seconds,
             travel_time_seconds=travel_time,
         )
 
@@ -126,8 +130,13 @@ class TransitionCandidateBuilder:
         self,
         from_track: TrackSummary,
         to_track: TrackSummary,
+        from_offset_seconds: float = 0.0,
+        to_offset_seconds: float = 0.0,
     ) -> dict:
-        """Explain why a cross-camera transition pair is valid or rejected."""
+        """Explain the transition using offsets added to video-relative time."""
+
+        if not math.isfinite(from_offset_seconds) or not math.isfinite(to_offset_seconds):
+            raise ValueError("timeline offsets must be finite")
 
         if from_track.camera_id == to_track.camera_id:
             return {
@@ -147,8 +156,8 @@ class TransitionCandidateBuilder:
             }
 
         travel_time = (
-            to_track.start_time
-            - from_track.end_time
+            (to_track.start_time + to_offset_seconds)
+            - (from_track.end_time + from_offset_seconds)
         )
 
         if not self.topology.is_travel_time_valid(

@@ -1,6 +1,7 @@
 """Tests for the Phase 11 multi-video pipeline."""
 
 from pathlib import Path
+import math
 
 import pytest
 
@@ -9,6 +10,25 @@ from src.pipeline.multi_video_pipeline import (
     MultiVideoPipelineError,
 )
 from src.pipeline.types import VideoInput
+
+
+@pytest.mark.parametrize("offset", [math.nan, math.inf, -math.inf, True, "2"])
+def test_video_input_rejects_invalid_timeline_offset(offset) -> None:
+    with pytest.raises(ValueError, match="finite number"):
+        VideoInput(
+            video_path="camera.mp4",
+            camera_id="CAM01",
+            timeline_offset_seconds=offset,
+        )
+
+
+def test_video_input_accepts_finite_timeline_offset() -> None:
+    video = VideoInput(
+        video_path="camera.mp4",
+        camera_id="CAM01",
+        timeline_offset_seconds=-12.5,
+    )
+    assert video.timeline_offset_seconds == -12.5
 
 
 def create_video_file(

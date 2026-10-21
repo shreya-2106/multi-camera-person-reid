@@ -70,6 +70,41 @@ def test_valid_transition():
     assert candidate.travel_time_seconds == pytest.approx(2.0)
 
 
+def test_documented_camera_offset_aligns_independent_video_times():
+    topology = CameraTopology.from_yaml(TOPOLOGY_CONFIG)
+    builder = TransitionCandidateBuilder(topology)
+    source = make_track("CAM01", 3, 20.0, 30.0)
+    destination = make_track("CAM02", 6, 12.0, 18.0)
+
+    # Offset convention: add each camera's offset to its video-relative time.
+    # CAM02's +20 s offset puts its entry 2 s after CAM01's exit.
+    candidate = builder.build_pair(
+        source,
+        destination,
+        from_offset_seconds=0.0,
+        to_offset_seconds=20.0,
+    )
+
+    assert candidate is not None
+    assert candidate.travel_time_seconds == pytest.approx(2.0)
+    assert candidate.exit_time == pytest.approx(30.0)
+    assert candidate.entry_time == pytest.approx(32.0)
+
+
+def test_offset_does_not_hide_physically_impossible_travel_time():
+    topology = CameraTopology.from_yaml(TOPOLOGY_CONFIG)
+    builder = TransitionCandidateBuilder(topology)
+    source = make_track("CAM01", 3, 20.0, 30.0)
+    destination = make_track("CAM02", 6, 12.0, 18.0)
+
+    assert builder.build_pair(
+        source,
+        destination,
+        from_offset_seconds=0.0,
+        to_offset_seconds=60.0,
+    ) is None
+
+
 def test_transition_too_fast():
     topology = CameraTopology.from_yaml(
         TOPOLOGY_CONFIG

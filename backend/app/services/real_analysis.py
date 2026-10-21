@@ -92,6 +92,7 @@ def run_real_analysis(
     video_paths: Sequence[Path],
     camera_ids: Sequence[str],
     analysis_id: int | str = "local",
+    camera_time_offsets_seconds: dict[str, float] | None = None,
 ) -> MultiVideoAnalysisResult:
     """Run the existing Phase 1-14 ML pipeline in an isolated workspace."""
 
@@ -128,6 +129,7 @@ def run_real_analysis(
         VideoInput(
             video_path=str(Path(video_path).resolve()),
             camera_id=camera_id,
+            timeline_offset_seconds=(camera_time_offsets_seconds or {}).get(camera_id),
         )
         for video_path, camera_id in zip(
             video_paths,

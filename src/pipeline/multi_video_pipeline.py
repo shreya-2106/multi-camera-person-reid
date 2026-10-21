@@ -473,6 +473,10 @@ class MultiVideoPipeline:
                 detection_count=detection_count,
                 fps=getattr(tracking_result, "fps", None),
                 track_observations=self._summarize_track_observations(tracks),
+                timeline_offset_seconds=video.timeline_offset_seconds,
+                timeline_offset_source=(
+                    "user_provided" if video.timeline_offset_seconds is not None else None
+                ),
             )
 
         except Exception as exc:
@@ -735,6 +739,7 @@ class MultiVideoPipeline:
         matcher = CrossCameraMatcher(
             topology=topology
         )
+        inputs_by_camera = {video.camera_id: video for video in videos}
 
         tracks_by_camera: dict[
             str,
@@ -959,6 +964,60 @@ class MultiVideoPipeline:
                         if existing_assignment is None:
                             continue
                         try:
+                            from_input = inputs_by_camera[from_camera]
+                            to_input = inputs_by_camera[to_camera]
+                            offsets_known = (
+                                from_input.timeline_offset_seconds is not None
+                                and to_input.timeline_offset_seconds is not None
+                            )
+                            if not offsets_known:
+                                if not topology.can_transition(from_camera, to_camera):
+                                    candidate_reports.append({
+                                        "from_camera": from_camera,
+                                        "from_track_id": from_track_id,
+                                        "to_camera": to_camera,
+                                        "to_track_id": to_track_id,
+                                        "status": "rejected",
+                                        "reason": "invalid_topology",
+                                        "timing_basis": "unverified_video_relative_clocks",
+                                        "common_time_origin": False,
+                                        "timeline_offset_source": None,
+                                        "travel_time_seconds": None,
+                                        "transition": None,
+                                        "evidence": None,
+                                        "score": None,
+                                    })
+                                    continue
+                                similarity = matcher.compare_embedding_files(
+                                    from_embedding_path,
+                                    to_embedding_path,
+                                )
+                                candidate_reports.append({
+                                    "from_camera": from_camera,
+                                    "from_track_id": from_track_id,
+                                    "to_camera": to_camera,
+                                    "to_track_id": to_track_id,
+                                    "status": "timing_unverified",
+                                    "reason": "camera_timeline_offset_missing",
+                                    "timing_basis": "independent_video_relative_clocks",
+                                    "common_time_origin": False,
+                                    "timeline_offset_source": None,
+                                    "timeline_offsets_seconds": {
+                                        from_camera: from_input.timeline_offset_seconds,
+                                        to_camera: to_input.timeline_offset_seconds,
+                                    },
+                                    "appearance": similarity.to_dict(),
+                                    "travel_time_seconds": None,
+                                    "transition": None,
+                                    "evidence": None,
+                                    "score": None,
+                                    "final_decision": "unresolved",
+                                })
+                                continue
+                            pair_similarity = matcher.compare_embedding_files(
+                                from_embedding_path,
+                                to_embedding_path,
+                            )
                             match_result = matcher.match_track_pair(
                                 from_track=from_summary,
                                 to_track=to_summary,
@@ -968,6 +1027,9 @@ class MultiVideoPipeline:
                                     existing_assignment
                                     .global_person_id
                                 ),
+                                from_offset_seconds=float(from_input.timeline_offset_seconds),
+                                to_offset_seconds=float(to_input.timeline_offset_seconds),
+                                similarity=pair_similarity,
                             )
                         except Exception:
                             continue
@@ -977,6 +1039,8 @@ class MultiVideoPipeline:
                                 matcher.transition_builder.explain_pair(
                                     from_summary,
                                     to_summary,
+                                    float(from_input.timeline_offset_seconds),
+                                    float(to_input.timeline_offset_seconds),
                                 )
                             )
 
@@ -996,6 +1060,15 @@ class MultiVideoPipeline:
                                     ),
                                     "status": explanation["status"],
                                     "reason": explanation["reason"],
+                                    "final_decision": "rejected",
+                                    "timing_basis": "video_relative_plus_configured_offsets",
+                                    "common_time_origin": True,
+                                    "timeline_offset_source": "user_provided",
+                                    "timeline_offsets_seconds": {
+                                        from_camera: from_input.timeline_offset_seconds,
+                                        to_camera: to_input.timeline_offset_seconds,
+                                    },
+                                    "appearance": pair_similarity.to_dict(),
                                     "travel_time_seconds": (
                                         explanation[
                                             "travel_time_seconds"
@@ -1010,7 +1083,12 @@ class MultiVideoPipeline:
                             continue
 
                         candidate_reports.append(
-                            match_result.report.to_dict()
+                            {
+                                **match_result.report.to_dict(),
+                                "final_decision": (
+                                    match_result.identity_result.decision.decision.value
+                                ),
+                            }
                         )
 
                         if (

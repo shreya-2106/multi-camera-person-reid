@@ -355,6 +355,11 @@ function renderCameraInputs() {
                     name="videos"
                     accept=".mp4,.avi,.mov,.mkv,.m4v,video/*"
                 >
+                <label class="timeline-offset-field">
+                    Timeline offset in upload order (seconds)
+                    <input type="number" step="any" id="camera-offset-${index}" placeholder="Unknown">
+                </label>
+                <small>Add the offset to this clip’s elapsed time. Set a known reference clip to 0; leave unknown offsets blank.</small>
             </div>
 
             <button
@@ -409,6 +414,7 @@ async function createSearch(event) {
     const formData = new FormData();
 
     formData.append("case_name", caseName);
+    const timelineOffsets = {};
 
     let selectedFiles = 0;
 
@@ -424,6 +430,15 @@ async function createSearch(event) {
         }
 
         formData.append("videos", input.files[0]);
+        const offsetInput = $(`camera-offset-${index}`);
+        if (offsetInput && offsetInput.value.trim() !== "") {
+            const offset = Number(offsetInput.value);
+            if (!Number.isFinite(offset)) {
+                showStatus(`Enter a finite timeline offset for CAM${String(index).padStart(2, "0")}.`, "error");
+                return;
+            }
+            timelineOffsets[`CAM${String(selectedFiles + 1).padStart(2, "0")}`] = offset;
+        }
         selectedFiles += 1;
     }
 
@@ -433,6 +448,9 @@ async function createSearch(event) {
             "error"
         );
         return;
+    }
+    if (Object.keys(timelineOffsets).length) {
+        formData.append("camera_time_offsets_seconds", JSON.stringify(timelineOffsets));
     }
 
     try {
@@ -508,6 +526,9 @@ function renderSearchResult(search) {
     const matchedPeople = summary && Array.isArray(summary.matched_people)
         ? summary.matched_people
         : [];
+    const unresolvedCandidates = candidates.filter(
+        (candidate) => candidate.status === "timing_unverified"
+    );
 
     const identityElement = $("identity-label");
     const matchBanner = $("match-banner");
@@ -518,6 +539,8 @@ function renderSearchResult(search) {
         } else if (matchedPeople.length) {
             identityElement.textContent =
                 matchedPeople.map((person) => `Global Person ${person.global_person_id}`).join(", ");
+        } else if (unresolvedCandidates.length) {
+            identityElement.textContent = "Potential appearance candidates · timing unverified";
         } else {
             identityElement.textContent =
                 "No cross-camera match";
@@ -573,6 +596,9 @@ function renderSearchResult(search) {
             matchBanner.textContent = `${matchedPeople.length} unique matched ${matchedPeople.length === 1 ? "person" : "people"} across ${new Set(matchedPeople.flatMap((person) => person.camera_ids || [])).size} cameras.`;
         } else {
             matchBanner.classList.add("result-no-match");
+            if (unresolvedCandidates.length) {
+                matchBanner.textContent = `${unresolvedCandidates.length} appearance candidate(s) need synchronized camera timing. No identity was accepted.`;
+            } else {
             const rejectionCounts = {};
             candidates.filter((candidate) => candidate.status === "rejected")
                 .forEach((candidate) => {
@@ -585,6 +611,7 @@ function renderSearchResult(search) {
             matchBanner.textContent = rejectionSummary
                 ? `No accepted cross-camera match. Candidate rejections: ${rejectionSummary}.`
                 : "No accepted cross-camera match. Available evidence did not meet the configured validation criteria.";
+            }
         }
     }
 
@@ -592,11 +619,29 @@ function renderSearchResult(search) {
 
     renderCameraResults(videos, search.id);
 
-    renderEvidence(
-        acceptedMatches.length
-            ? acceptedMatches[0].evidence || {}
-            : {}
-    );
+    const candidateSimilarity = (candidate) => candidate.appearance?.mean_similarity
+        ?? candidate.evidence?.mean_similarity;
+    const bestEvidenceCandidate = candidates
+        .filter((candidate) => Number.isFinite(candidateSimilarity(candidate)))
+        .sort((left, right) => candidateSimilarity(right) - candidateSimilarity(left))[0];
+    if (acceptedMatches.length) {
+        renderEvidence(acceptedMatches[0].evidence || {}, "Accepted identity evidence.");
+    } else if (bestEvidenceCandidate) {
+        const appearance = bestEvidenceCandidate.appearance || bestEvidenceCandidate.evidence || {};
+        renderEvidence(
+            {
+                mean_similarity: appearance.mean_similarity,
+                max_similarity: appearance.max_similarity,
+                comparison_count: appearance.comparison_count,
+                temporal_valid: appearance.temporal_valid,
+                topology_valid: appearance.topology_valid,
+                travel_time_seconds: appearance.travel_time_seconds ?? bestEvidenceCandidate.travel_time_seconds,
+            },
+            `Candidate evidence only: ${bestEvidenceCandidate.from_camera} Track ${bestEvidenceCandidate.from_track_id} ↔ ${bestEvidenceCandidate.to_camera} Track ${bestEvidenceCandidate.to_track_id}. Status: ${bestEvidenceCandidate.status}; final decision: ${bestEvidenceCandidate.final_decision || "unavailable"}. Cosine similarity is not a match probability.`,
+        );
+    } else {
+        renderEvidence({}, "No accepted identity or scored appearance candidate is available.");
+    }
 
     renderTimeline(buildRealTimeline(summary, candidates));
 
@@ -809,12 +854,15 @@ function renderCameraResults(videos) {
 }
 
 
-function renderEvidence(evidence) {
+function renderEvidence(evidence, context = "") {
     const container = $("evidence-grid");
     if (!container) return;
+    const contextElement = $("evidence-context");
+    if (contextElement) contextElement.textContent = context;
     container.replaceChildren();
     const values = [
-        ["Appearance similarity", formatEvidenceValue(evidence.mean_similarity)],
+        ["Mean cosine similarity", formatEvidenceValue(evidence.mean_similarity)],
+        ["Maximum cosine similarity", formatEvidenceValue(evidence.max_similarity)],
         ["Temporal validation", evidence.temporal_valid === true ? "Valid" : evidence.temporal_valid === false ? "Rejected" : "Not available"],
         ["Camera topology", evidence.topology_valid === true ? "Valid" : evidence.topology_valid === false ? "Rejected" : "Not available"],
         ["Travel time", Number.isFinite(evidence.travel_time_seconds) ? `${evidence.travel_time_seconds.toFixed(1)} s` : "Not available"],
@@ -907,21 +955,42 @@ function buildRealTimeline(summary, candidates) {
     });
     events.sort((left, right) => left.time.localeCompare(right.time));
 
+    const candidateRows = Array.isArray(candidates) ? candidates : [];
     if (!events.length) {
-        const rejectionCounts = {};
-        (Array.isArray(candidates) ? candidates : [])
-            .filter((candidate) => candidate.status === "rejected")
-            .forEach((candidate) => {
-                const reason = candidate.reason || "other validation";
-                rejectionCounts[reason] = (rejectionCounts[reason] || 0) + 1;
-            });
-        Object.entries(rejectionCounts).forEach(([reason, count]) => {
+        const unverified = candidateRows.filter((candidate) => candidate.status === "timing_unverified");
+        const rejected = candidateRows.filter((candidate) => candidate.status === "rejected");
+        if (unverified.length) {
+            const topCandidates = unverified
+                .filter((candidate) => Number.isFinite(candidate.appearance?.mean_similarity))
+                .sort((left, right) => right.appearance.mean_similarity - left.appearance.mean_similarity)
+                .slice(0, 5);
             events.push({
                 time: "",
                 camera: "Candidate review",
-                event: `${count} candidates rejected: ${reason.replaceAll("_", " ")}`,
+                event: `${unverified.length} appearance candidates have unverified timing. No identity was accepted.`,
             });
-        });
+            topCandidates.forEach((candidate) => {
+                events.push({
+                    time: "",
+                    camera: `${candidate.from_camera} → ${candidate.to_camera}`,
+                    event: `Track ${candidate.from_track_id} → Track ${candidate.to_track_id}: mean cosine similarity ${formatPercent(candidate.appearance.mean_similarity)}; timing unverified.`,
+                });
+            });
+        }
+        if (rejected.length) {
+            const rejectionCounts = {};
+            rejected.forEach((candidate) => {
+                const reason = candidate.reason || "other validation";
+                rejectionCounts[reason] = (rejectionCounts[reason] || 0) + 1;
+            });
+            Object.entries(rejectionCounts).forEach(([reason, count]) => {
+                events.push({
+                    time: "",
+                    camera: "Candidate review",
+                    event: `${count} candidates rejected: ${reason.replaceAll("_", " ")}`,
+                });
+            });
+        }
         if (!events.length) events.push({ time: "", camera: "Timeline", event: "No accepted cross-camera observations are available." });
     }
 

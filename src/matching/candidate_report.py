@@ -28,6 +28,10 @@ class CandidateReport:
     transition: Optional[TransitionCandidate] = None
     evidence: Optional[TransitionEvidence] = None
     score: Optional[CandidateScore] = None
+    timing_basis: str = "shared_timeline_assumed"
+    timeline_offsets_seconds: Optional[dict[str, float]] = None
+    timeline_offset_source: Optional[str] = None
+    common_time_origin: bool = True
 
     def __post_init__(self) -> None:
         if not self.from_camera:
@@ -86,4 +90,8 @@ class CandidateReport:
                 if self.score is not None
                 else None
             ),
+            "timing_basis": self.timing_basis,
+            "timeline_offsets_seconds": self.timeline_offsets_seconds,
+            "timeline_offset_source": self.timeline_offset_source,
+            "common_time_origin": self.common_time_origin,
         }

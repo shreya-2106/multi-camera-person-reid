@@ -4,6 +4,7 @@ import csv
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from src.pipeline.multi_video_pipeline import MultiVideoPipeline
 from src.pipeline.types import (
@@ -108,9 +109,15 @@ def write_embeddings(
     )
 
 
+@pytest.mark.parametrize(
+    ("offsets", "expected_accept"),
+    [((0.0, 0.0), True), ((None, None), False)],
+)
 def test_phase13_pipeline_assigns_same_global_identity(
     tmp_path: Path,
     monkeypatch,
+    offsets: tuple[float | None, float | None],
+    expected_accept: bool,
 ) -> None:
     """Verify the complete Phase 13 cross-camera integration."""
 
@@ -229,10 +236,12 @@ def test_phase13_pipeline_assigns_same_global_identity(
         VideoInput(
             video_path="cam01.mp4",
             camera_id="CAM01",
+            timeline_offset_seconds=offsets[0],
         ),
         VideoInput(
             video_path="cam02.mp4",
             camera_id="CAM02",
+            timeline_offset_seconds=offsets[1],
         ),
     )
 
@@ -302,8 +311,20 @@ def test_phase13_pipeline_assigns_same_global_identity(
     # --------------------------------------------------------------
 
     assert cam02_result.track_id == 7
-    assert cam02_result.global_person_id == 1
-    assert cam02_result.decision == "accept"
+    if expected_accept:
+        assert cam02_result.global_person_id == 1
+        assert cam02_result.decision == "accept"
+    else:
+        assert cam02_result.global_person_id != 1
+        assert cam02_result.decision == "new_identity"
+        assert any(report["status"] == "timing_unverified" for report in candidate_reports)
+        unresolved = next(
+            report for report in candidate_reports
+            if report["status"] == "timing_unverified"
+        )
+        assert unresolved["final_decision"] == "unresolved"
+        assert unresolved["appearance"]["mean_similarity"] > 0.99
+        return
 
     # --------------------------------------------------------------
     # Verify the matching evidence.
